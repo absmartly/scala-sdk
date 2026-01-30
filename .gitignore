@@ -1,0 +1,23 @@
+# sbt
+target/
+project/target/
+project/project/
+.bsp/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+.metals/
+.bloop/
+
+# Scala
+*.class
+*.log
+.scala_dependencies
+.cache-main
+.cache-tests
+
+# OS
+.DS_Store
+*~
