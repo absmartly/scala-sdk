@@ -603,6 +603,302 @@ class ThreadSafeContextWrapper(context: Context) {
 | `finalizeContext()`   | `Future[Unit]` | Publish events and seal context               |
 | `refresh(newData: ContextData)` | `Unit` | Refresh context with new experiment data |
 
+## Platform-Specific Examples
+
+### Using with Play Framework
+
+Integrate ABsmartly into your Play Framework application using dependency injection.
+
+```scala
+// app/services/ABSmartlyService.scala
+package services
+
+import javax.inject._
+import com.absmartly.sdk._
+import play.api.Configuration
+import scala.concurrent.ExecutionContext
+
+@Singleton
+class ABSmartlyService @Inject()(config: Configuration)(implicit ec: ExecutionContext) {
+
+  private val sdk: SDK = {
+    val sdkConfig = SDKConfig(
+      endpoint = config.get[String]("absmartly.endpoint"),
+      apiKey = config.get[String]("absmartly.apiKey"),
+      application = config.get[String]("absmartly.application"),
+      environment = config.get[String]("absmartly.environment")
+    )
+    new SDK(sdkConfig)
+  }
+
+  def createContext(sessionId: String): scala.concurrent.Future[Context] = {
+    val units = Map("session_id" -> sessionId)
+    sdk.createContext(units)
+  }
+}
+
+// app/controllers/ProductController.scala
+package controllers
+
+import javax.inject._
+import play.api.mvc._
+import services.ABSmartlyService
+import scala.concurrent.{ExecutionContext, Await}
+import scala.concurrent.duration._
+
+@Singleton
+class ProductController @Inject()(
+  cc: ControllerComponents,
+  absmartlyService: ABSmartlyService
+)(implicit ec: ExecutionContext) extends AbstractController(cc) {
+
+  def show = Action.async { implicit request =>
+    val sessionId = request.session.get("sessionId")
+      .getOrElse(java.util.UUID.randomUUID().toString)
+
+    absmartlyService.createContext(sessionId).map { context =>
+      val treatment = context.treatment("exp_product_layout")
+
+      context.finalizeContext()
+
+      if (treatment == 0) {
+        Ok(views.html.productControl()).withSession("sessionId" -> sessionId)
+      } else {
+        Ok(views.html.productTreatment()).withSession("sessionId" -> sessionId)
+      }
+    }
+  }
+}
+
+// conf/application.conf
+absmartly {
+  endpoint = "https://your-company.absmartly.io/v1"
+  endpoint = ${?ABSMARTLY_ENDPOINT}
+
+  apiKey = ${ABSMARTLY_API_KEY}
+
+  application = "website"
+  application = ${?ABSMARTLY_APPLICATION}
+
+  environment = "production"
+  environment = ${?ABSMARTLY_ENVIRONMENT}
+}
+```
+
+### Using with Akka HTTP
+
+Use ABsmartly with Akka HTTP for reactive request handling.
+
+```scala
+import akka.actor.ActorSystem
+import akka.http.scaladsl.Http
+import akka.http.scaladsl.server.Directives._
+import akka.http.scaladsl.server.Route
+import akka.http.scaladsl.model._
+import com.absmartly.sdk._
+import scala.concurrent.{ExecutionContext, Future}
+
+object WebServer {
+
+  def main(args: Array[String]): Unit = {
+    implicit val system: ActorSystem = ActorSystem("absmartly-system")
+    implicit val ec: ExecutionContext = system.dispatcher
+
+    val sdkConfig = SDKConfig(
+      endpoint = "https://your-company.absmartly.io/v1",
+      apiKey = "YOUR-API-KEY",
+      application = "website",
+      environment = "production"
+    )
+
+    val sdk = new SDK(sdkConfig)
+
+    val route: Route =
+      path("product") {
+        get {
+          optionalCookie("session_id") { sessionCookie =>
+            val sessionId = sessionCookie.map(_.value)
+              .getOrElse(java.util.UUID.randomUUID().toString)
+
+            val units = Map("session_id" -> sessionId)
+
+            onSuccess(sdk.createContext(units)) { context =>
+              val treatment = context.treatment("exp_product_layout")
+
+              context.finalizeContext()
+
+              val responseHtml = if (treatment == 0) {
+                "<h1>Control Group</h1>"
+              } else {
+                "<h1>Treatment Group</h1>"
+              }
+
+              complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, responseHtml))
+            }
+          }
+        }
+      }
+
+    Http().newServerAt("localhost", 8080).bind(route)
+    println("Server online at http://localhost:8080/")
+  }
+}
+```
+
+## Advanced Request Configuration
+
+### Request Timeout with Futures
+
+You can implement custom timeouts for context creation using Future racing patterns.
+
+```scala
+import com.absmartly.sdk._
+import scala.concurrent.{Future, TimeoutException, Promise}
+import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext.Implicits.global
+import java.util.concurrent.{Executors, TimeUnit}
+
+def createContextWithTimeout(sdk: SDK, sessionId: String, timeout: FiniteDuration): Future[Option[Context]] = {
+  val units = Map("session_id" -> sessionId)
+  val contextFuture = sdk.createContext(units)
+
+  val timeoutPromise = Promise[Context]()
+  val scheduler = Executors.newSingleThreadScheduledExecutor()
+
+  scheduler.schedule(new Runnable {
+    def run(): Unit = {
+      timeoutPromise.tryFailure(new TimeoutException("Context creation timed out"))
+    }
+  }, timeout.toMillis, TimeUnit.MILLISECONDS)
+
+  Future.firstCompletedOf(Seq(contextFuture, timeoutPromise.future))
+    .map { context =>
+      scheduler.shutdown()
+      Some(context)
+    }
+    .recover {
+      case _: TimeoutException =>
+        scheduler.shutdown()
+        println("Context creation timed out")
+        None
+    }
+}
+
+// Usage
+val resultFuture = createContextWithTimeout(sdk, "abc123", 1500.milliseconds)
+
+resultFuture.foreach {
+  case Some(context) =>
+    println("Context created successfully")
+    val treatment = context.treatment("exp_test")
+    context.finalizeContext()
+  case None =>
+    println("Fallback to default behavior")
+}
+```
+
+### Request Cancellation with Futures
+
+Implement cancellable context loading using Promise-based cancellation.
+
+```scala
+import com.absmartly.sdk._
+import scala.concurrent.{Future, Promise}
+import scala.concurrent.ExecutionContext.Implicits.global
+
+class ExperimentManager {
+  private var cancelPromise: Option[Promise[Unit]] = None
+
+  def loadExperiment(sdk: SDK, sessionId: String): Future[Option[Context]] = {
+    val cancel = Promise[Unit]()
+    cancelPromise = Some(cancel)
+
+    val units = Map("session_id" -> sessionId)
+    val contextFuture = sdk.createContext(units)
+
+    Future.firstCompletedOf(Seq(
+      contextFuture.map(Some(_)),
+      cancel.future.map(_ => None)
+    )).map {
+      case Some(context) =>
+        println("Context ready!")
+        Some(context)
+      case None =>
+        println("Context loading was cancelled")
+        None
+    }.recover {
+      case e: Exception =>
+        println(s"Error loading context: ${e.getMessage}")
+        None
+    }
+  }
+
+  def cancelLoad(): Unit = {
+    cancelPromise.foreach(_.success(()))
+    cancelPromise = None
+  }
+}
+
+// Usage
+val manager = new ExperimentManager()
+
+val loadFuture = manager.loadExperiment(sdk, "abc123")
+
+loadFuture.foreach {
+  case Some(context) =>
+    val treatment = context.treatment("exp_test")
+    println(s"Treatment: $treatment")
+    context.finalizeContext()
+  case None =>
+    println("Loading cancelled or failed")
+}
+
+// Cancel if needed (e.g., user navigated away)
+manager.cancelLoad()
+```
+
+### Using Akka Patterns for Advanced Timeout Handling
+
+If you're using Akka, you can leverage its built-in timeout patterns.
+
+```scala
+import akka.actor.ActorSystem
+import akka.pattern.after
+import com.absmartly.sdk._
+import scala.concurrent.{Future, TimeoutException}
+import scala.concurrent.duration._
+
+class AkkaExperimentService(sdk: SDK)(implicit system: ActorSystem) {
+  import system.dispatcher
+
+  def createContextWithTimeout(sessionId: String, timeout: FiniteDuration): Future[Context] = {
+    val units = Map("session_id" -> sessionId)
+    val contextFuture = sdk.createContext(units)
+
+    val timeoutFuture = after(timeout, system.scheduler) {
+      Future.failed(new TimeoutException(s"Context creation timed out after $timeout"))
+    }
+
+    Future.firstCompletedOf(Seq(contextFuture, timeoutFuture))
+  }
+}
+
+// Usage
+implicit val system: ActorSystem = ActorSystem()
+val service = new AkkaExperimentService(sdk)
+
+service.createContextWithTimeout("abc123", 2.seconds)
+  .map { context =>
+    val treatment = context.treatment("exp_test")
+    println(s"Treatment: $treatment")
+    context.finalizeContext()
+  }
+  .recover {
+    case _: TimeoutException =>
+      println("Timeout occurred, using default values")
+  }
+```
+
 ## Testing
 
 Run the test suite:
