@@ -315,30 +315,52 @@ class Context(
     val hasCustom = _cassignments.contains(experimentName)
     val experiment = _index.get(experimentName)
 
-    // Check existing assignment
     _assignments.get(experimentName) match {
       case Some(assignment) if isAssignmentValid(assignment, experiment, hasOverride, hasCustom) =>
         return assignment
-      case _ => // Need new assignment
+      case _ =>
     }
 
-    // Create new assignment
     val assignment = experiment match {
       case Some(exp) if hasOverride =>
-        // Override variant
         createAssignment(exp, _overrides(experimentName), overridden = true)
 
-      case Some(exp) if hasCustom =>
-        // Custom assignment
-        createAssignment(exp, _cassignments(experimentName), custom = true)
-
       case Some(exp) =>
-        // Normal assignment
-        val variant = assignVariant(exp)
-        createAssignment(exp, variant)
+        val audienceMismatch = checkAudienceMismatch(exp)
+
+        if (exp.audienceStrict && audienceMismatch) {
+          createAssignmentRaw(exp, 0, assigned = true, eligible = true,
+            audienceMismatch = true, fullOn = false, custom = false)
+        } else if (exp.fullOnVariant == 0) {
+          _units.get(exp.unitType) match {
+            case Some(_) =>
+              val assigner = getOrCreateAssigner(exp.unitType)
+              val eligible = assigner.assign(exp.trafficSplit, exp.trafficSeedHi, exp.trafficSeedLo) == 1
+
+              if (eligible) {
+                if (hasCustom) {
+                  createAssignmentRaw(exp, _cassignments(experimentName), assigned = true, eligible = true,
+                    audienceMismatch = audienceMismatch, fullOn = false, custom = true)
+                } else {
+                  val variant = assigner.assign(exp.split, exp.seedHi, exp.seedLo)
+                  createAssignmentRaw(exp, variant, assigned = true, eligible = true,
+                    audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+                }
+              } else {
+                createAssignmentRaw(exp, 0, assigned = true, eligible = false,
+                  audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+              }
+            case None =>
+              createAssignmentRaw(exp, 0, assigned = true, eligible = false,
+                audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+          }
+        } else {
+          createAssignmentRaw(exp, exp.fullOnVariant, assigned = true, eligible = true,
+            audienceMismatch = audienceMismatch, fullOn = true, custom = false)
+        }
 
       case None =>
-        // Experiment not running
+        val variant = if (hasOverride) _overrides(experimentName) else 0
         Assignment(
           id = 0,
           name = experimentName,
@@ -346,7 +368,7 @@ class Context(
           iteration = 0,
           trafficSplit = List.empty,
           fullOnVariant = 0,
-          variant = 0,
+          variant = variant,
           assigned = false,
           exposed = false,
           eligible = true,
@@ -386,21 +408,24 @@ class Context(
   private def createAssignment(
     exp: ExperimentData,
     variant: Int,
-    overridden: Boolean = false,
-    custom: Boolean = false
+    overridden: Boolean = false
   ): Assignment = {
-    // Check audience match
-    val audienceMismatch = exp.audience.exists { aud =>
-      val matcher = new AudienceMatcher(getAttributes())
-      matcher.evaluate(Some(aud)) match {
-        case Some(result) => !result
-        case None => false
-      }
-    }
+    val audienceMismatch = checkAudienceMismatch(exp)
+    createAssignmentRaw(exp, variant, assigned = true, eligible = true,
+      audienceMismatch = audienceMismatch, fullOn = false, custom = false,
+      overridden = overridden)
+  }
 
-    // Check eligibility (has required unit type)
-    val eligible = exp.unitType.isEmpty || _units.contains(exp.unitType)
-
+  private def createAssignmentRaw(
+    exp: ExperimentData,
+    variant: Int,
+    assigned: Boolean,
+    eligible: Boolean,
+    audienceMismatch: Boolean,
+    fullOn: Boolean,
+    custom: Boolean,
+    overridden: Boolean = false
+  ): Assignment = {
     Assignment(
       id = exp.id,
       name = exp.name,
@@ -409,30 +434,39 @@ class Context(
       trafficSplit = exp.trafficSplit,
       fullOnVariant = exp.fullOnVariant,
       variant = variant,
-      assigned = true,
+      assigned = assigned,
       exposed = false,
       eligible = eligible,
       overridden = overridden,
       audienceMismatch = audienceMismatch,
-      fullOn = variant == exp.fullOnVariant,
+      fullOn = fullOn,
       custom = custom
     )
   }
 
-  private def assignVariant(exp: ExperimentData): Int = {
-    // Get or create assigner for unit type
-    val assigner = _assigners.getOrElseUpdate(exp.unitType, {
-      _units.get(exp.unitType) match {
+  private def checkAudienceMismatch(exp: ExperimentData): Boolean = {
+    exp.audience.exists { aud =>
+      if (aud.isEmpty || aud == "null" || aud == "{}") {
+        false
+      } else {
+        val matcher = new AudienceMatcher(getAttributes())
+        matcher.evaluate(Some(aud)) match {
+          case Some(result) => !result
+          case None => false
+        }
+      }
+    }
+  }
+
+  private def getOrCreateAssigner(unitType: String): VariantAssigner = {
+    _assigners.getOrElseUpdate(unitType, {
+      _units.get(unitType) match {
         case Some(uid) =>
-          val hashedUid = Utils.hashUnit(uid)
-          new VariantAssigner(hashedUid)
+          new VariantAssigner(Utils.hashUnit(uid))
         case None =>
-          // No unit for this type, use empty string
           new VariantAssigner(Utils.hashUnit(""))
       }
     })
-
-    assigner.assign(exp.split, exp.seedHi, exp.seedLo)
   }
 
   private def _variableValue(key: String, defaultValue: String, queueExposure: Boolean): String = {
@@ -463,7 +497,7 @@ class Context(
   }
 
   private def _queueExposure(assignment: Assignment): Unit = {
-    if (!assignment.exposed && assignment.assigned && assignment.eligible) {
+    if (!assignment.exposed) {
       _assignments(assignment.name) = assignment.copy(exposed = true)
 
       _exposures += Exposure(

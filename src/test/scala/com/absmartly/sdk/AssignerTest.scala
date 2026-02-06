@@ -2,94 +2,71 @@ package com.absmartly.sdk
 
 import org.scalatest.funsuite.AnyFunSuite
 
-/**
- * Variant assignment tests
- *
- * CRITICAL: Unit must be hashed with Utils.hashUnit() BEFORE creating VariantAssigner
- */
 class AssignerTest extends AnyFunSuite {
 
-  test("assign bleh@absmartly.com with 50/50 split, seeds 0/0") {
-    val hashedUnit = Utils.hashUnit("bleh@absmartly.com")
-    val assigner = new VariantAssigner(hashedUnit)
-    val variant = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 0)
-    assert(variant == 0)
+  test("chooseVariant returns correct variant for boundary conditions") {
+    assert(Utils.chooseVariant(List(0.0, 1.0), 0.0) == 1)
+    assert(Utils.chooseVariant(List(0.0, 1.0), 0.5) == 1)
+    assert(Utils.chooseVariant(List(1.0, 0.0), 0.0) == 0)
+    assert(Utils.chooseVariant(List(0.5, 0.5), 0.0) == 0)
+    assert(Utils.chooseVariant(List(0.5, 0.5), 0.5) == 1)
+    assert(Utils.chooseVariant(List(0.33, 0.33, 0.34), 0.0) == 0)
+    assert(Utils.chooseVariant(List(0.33, 0.33, 0.34), 0.33) == 1)
+    assert(Utils.chooseVariant(List(0.33, 0.33, 0.34), 0.66) == 2)
   }
 
-  test("assign bleh@absmartly.com with 50/50 split, seeds 0/1") {
-    val hashedUnit = Utils.hashUnit("bleh@absmartly.com")
-    val assigner = new VariantAssigner(hashedUnit)
-    val variant = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 1)
-    assert(variant == 1)
-  }
+  val canonicalTestCases: List[(String, List[Double], Int, Int, Int)] = List(
+    ("bleh@absmartly.com", List(0.5, 0.5), 0x00000000, 0x00000000, 0),
+    ("bleh@absmartly.com", List(0.5, 0.5), 0x00000000, 0x00000001, 1),
+    ("bleh@absmartly.com", List(0.5, 0.5), 0x8015406f, 0x7ef49b98, 0),
+    ("bleh@absmartly.com", List(0.5, 0.5), 0x3b2e7d90, 0xca87df4d, 0),
+    ("bleh@absmartly.com", List(0.5, 0.5), 0x52c1f657, 0xd248bb2e, 0),
+    ("bleh@absmartly.com", List(0.5, 0.5), 0x865a84d0, 0xaa22d41a, 0),
+    ("bleh@absmartly.com", List(0.5, 0.5), 0x27d1dc86, 0x845461b9, 1),
+    ("bleh@absmartly.com", List(0.33, 0.33, 0.34), 0x00000000, 0x00000000, 0),
+    ("bleh@absmartly.com", List(0.33, 0.33, 0.34), 0x00000000, 0x00000001, 2),
+    ("bleh@absmartly.com", List(0.33, 0.33, 0.34), 0x8015406f, 0x7ef49b98, 0),
+    ("bleh@absmartly.com", List(0.33, 0.33, 0.34), 0x3b2e7d90, 0xca87df4d, 0),
+    ("bleh@absmartly.com", List(0.33, 0.33, 0.34), 0x52c1f657, 0xd248bb2e, 0),
+    ("bleh@absmartly.com", List(0.33, 0.33, 0.34), 0x865a84d0, 0xaa22d41a, 1),
+    ("bleh@absmartly.com", List(0.33, 0.33, 0.34), 0x27d1dc86, 0x845461b9, 1),
+    ("123456789", List(0.5, 0.5), 0x00000000, 0x00000000, 1),
+    ("123456789", List(0.5, 0.5), 0x00000000, 0x00000001, 0),
+    ("123456789", List(0.5, 0.5), 0x8015406f, 0x7ef49b98, 1),
+    ("123456789", List(0.5, 0.5), 0x3b2e7d90, 0xca87df4d, 1),
+    ("123456789", List(0.5, 0.5), 0x52c1f657, 0xd248bb2e, 1),
+    ("123456789", List(0.5, 0.5), 0x865a84d0, 0xaa22d41a, 0),
+    ("123456789", List(0.5, 0.5), 0x27d1dc86, 0x845461b9, 0),
+    ("123456789", List(0.33, 0.33, 0.34), 0x00000000, 0x00000000, 2),
+    ("123456789", List(0.33, 0.33, 0.34), 0x00000000, 0x00000001, 1),
+    ("123456789", List(0.33, 0.33, 0.34), 0x8015406f, 0x7ef49b98, 2),
+    ("123456789", List(0.33, 0.33, 0.34), 0x3b2e7d90, 0xca87df4d, 2),
+    ("123456789", List(0.33, 0.33, 0.34), 0x52c1f657, 0xd248bb2e, 2),
+    ("123456789", List(0.33, 0.33, 0.34), 0x865a84d0, 0xaa22d41a, 0),
+    ("123456789", List(0.33, 0.33, 0.34), 0x27d1dc86, 0x845461b9, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.5, 0.5), 0x00000000, 0x00000000, 1),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.5, 0.5), 0x00000000, 0x00000001, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.5, 0.5), 0x8015406f, 0x7ef49b98, 1),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.5, 0.5), 0x3b2e7d90, 0xca87df4d, 1),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.5, 0.5), 0x52c1f657, 0xd248bb2e, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.5, 0.5), 0x865a84d0, 0xaa22d41a, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.5, 0.5), 0x27d1dc86, 0x845461b9, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.33, 0.33, 0.34), 0x00000000, 0x00000000, 2),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.33, 0.33, 0.34), 0x00000000, 0x00000001, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.33, 0.33, 0.34), 0x8015406f, 0x7ef49b98, 2),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.33, 0.33, 0.34), 0x3b2e7d90, 0xca87df4d, 1),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.33, 0.33, 0.34), 0x52c1f657, 0xd248bb2e, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.33, 0.33, 0.34), 0x865a84d0, 0xaa22d41a, 0),
+    ("e791e240fcd3df7d238cfc285f475e8152fcc0ec", List(0.33, 0.33, 0.34), 0x27d1dc86, 0x845461b9, 1)
+  )
 
-  test("assign 123456789 with 50/50 split, seeds 0/0") {
-    val hashedUnit = Utils.hashUnit("123456789")
-    val assigner = new VariantAssigner(hashedUnit)
-    val variant = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 0)
-    assert(variant == 1)
-  }
-
-  test("assign 123456789 with 50/50 split, seeds 0/1") {
-    val hashedUnit = Utils.hashUnit("123456789")
-    val assigner = new VariantAssigner(hashedUnit)
-    val variant = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 1)
-    assert(variant == 0)
-  }
-
-  test("assign bleh@absmartly.com with 33/33/34 split, seeds 0/1") {
-    val hashedUnit = Utils.hashUnit("bleh@absmartly.com")
-    val assigner = new VariantAssigner(hashedUnit)
-    val variant = assigner.assign(List(0.33, 0.33, 0.34), seedHi = 0, seedLo = 1)
-    assert(variant == 2)
-  }
-
-  test("assignment is deterministic") {
-    val hashedUnit = Utils.hashUnit("test@example.com")
-    val assigner = new VariantAssigner(hashedUnit)
-
-    val variant1 = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 0)
-    val variant2 = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 0)
-
-    assert(variant1 == variant2)
-  }
-
-  test("different seeds produce different assignments") {
-    val hashedUnit = Utils.hashUnit("test@example.com")
-    val assigner = new VariantAssigner(hashedUnit)
-
-    val variant1 = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 0)
-    val variant2 = assigner.assign(List(0.5, 0.5), seedHi = 0, seedLo = 1)
-
-    // They should be different (unless by rare chance they're the same)
-    // This test is probabilistic but with different seeds, very likely different
-    assert(variant1 >= 0 && variant1 <= 1)
-    assert(variant2 >= 0 && variant2 <= 1)
-  }
-
-  test("assign with 0/100 split always returns variant 1") {
-    val hashedUnit = Utils.hashUnit("test@example.com")
-    val assigner = new VariantAssigner(hashedUnit)
-    val variant = assigner.assign(List(0.0, 1.0), seedHi = 0, seedLo = 0)
-    assert(variant == 1)
-  }
-
-  test("assign with 100/0 split always returns variant 0") {
-    val hashedUnit = Utils.hashUnit("test@example.com")
-    val assigner = new VariantAssigner(hashedUnit)
-    val variant = assigner.assign(List(1.0, 0.0), seedHi = 0, seedLo = 0)
-    assert(variant == 0)
-  }
-
-  test("assign respects cumulative probabilities") {
-    val hashedUnit = Utils.hashUnit("deterministic-unit")
-    val assigner = new VariantAssigner(hashedUnit)
-
-    // Try different splits to ensure logic works
-    val variant1 = assigner.assign(List(0.25, 0.25, 0.25, 0.25), seedHi = 0, seedLo = 0)
-    assert(variant1 >= 0 && variant1 <= 3)
-
-    val variant2 = assigner.assign(List(0.1, 0.2, 0.3, 0.4), seedHi = 1, seedLo = 1)
-    assert(variant2 >= 0 && variant2 <= 3)
+  canonicalTestCases.zipWithIndex.foreach { case ((unit, split, seedHi, seedLo, expected), idx) =>
+    test(s"assign canonical case $idx: unit='${unit.take(20)}' split=${split.mkString(",")} seeds=0x${Integer.toHexString(seedHi)}:0x${Integer.toHexString(seedLo)}") {
+      val hashedUnit = Utils.hashUnit(unit)
+      val assigner = new VariantAssigner(hashedUnit)
+      val variant = assigner.assign(split, seedHi, seedLo)
+      assert(variant == expected,
+        s"Expected variant $expected, got $variant for unit='$unit', split=$split, seedHi=0x${Integer.toHexString(seedHi)}, seedLo=0x${Integer.toHexString(seedLo)}")
+    }
   }
 }
