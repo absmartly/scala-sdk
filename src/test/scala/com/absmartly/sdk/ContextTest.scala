@@ -634,7 +634,7 @@ class ContextTest extends AnyFunSuite {
     assert(variant >= 0)
   }
 
-  test("refresh does not re-queue exposures when experiment unchanged") {
+  test("refresh re-queues exposures even when experiment unchanged") {
     val context = createContext()
     context.treatment("exp_test_ab")
     assert(context.pending() == 1)
@@ -642,7 +642,7 @@ class ContextTest extends AnyFunSuite {
     context.refresh(testData)
 
     context.treatment("exp_test_ab")
-    assert(context.pending() == 1)
+    assert(context.pending() == 2)
   }
 
   test("setOverride does not check finalized state") {

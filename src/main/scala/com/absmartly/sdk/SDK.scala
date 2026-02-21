@@ -1,7 +1,9 @@
 package com.absmartly.sdk
 
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.control.NonFatal
 import sttp.client3._
+import sttp.model.StatusCode
 import io.circe.parser._
 import io.circe.syntax._
 
@@ -13,6 +15,7 @@ import io.circe.syntax._
 class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
 
   private val backend = HttpURLConnectionBackend()
+  private val logger = Logger.get
 
   /**
    * Create context by fetching data from API (ASYNC)
@@ -26,30 +29,59 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
     options: ContextOptions = ContextOptions()
   ): Future[Context] = {
     Future {
-      // Fetch context data from endpoint
-      val request = basicRequest
-        .post(uri"${config.endpoint}/context")
-        .header("X-API-Key", config.apiKey)
-        .header("X-Application", config.application)
-        .header("X-Environment", config.environment)
-        .header("Content-Type", "application/json")
-        .body(Map(
-          "units" -> units.asJson
-        ).asJson.noSpaces)
-        .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
+      try {
+        val request = basicRequest
+          .post(uri"${config.endpoint}/context")
+          .header("X-API-Key", config.apiKey)
+          .header("X-Application", config.application)
+          .header("X-Environment", config.environment)
+          .header("Content-Type", "application/json")
+          .body(Map(
+            "units" -> units.asJson
+          ).asJson.noSpaces)
+          .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
 
-      val response = request.send(backend)
+        val response = request.send(backend)
 
-      response.body match {
-        case Right(body) =>
-          parse(body).flatMap(_.as[ContextData]) match {
-            case Right(data) =>
-              new Context(this, data, units, options)
-            case Left(error) =>
-              throw new RuntimeException(s"Failed to parse context data: $error")
-          }
-        case Left(error) =>
-          throw new RuntimeException(s"Failed to fetch context data: $error")
+        response.code match {
+          case StatusCode.Ok =>
+            response.body match {
+              case Right(body) =>
+                parse(body).flatMap(_.as[ContextData]) match {
+                  case Right(data) =>
+                    logger.debug(s"Context created with ${data.experiments.length} experiments")
+                    new Context(this, data, units, options, config.eventLogger)
+                  case Left(parseError) =>
+                    logger.error(s"Parse error: $parseError\nBody: $body")
+                    throw ParseException(s"Failed to parse context data: ${parseError.getMessage}", Some(parseError))
+                }
+              case Left(error) =>
+                logger.error(s"Empty response body: $error")
+                throw NetworkException(s"Empty response: $error")
+            }
+          case StatusCode.Unauthorized =>
+            val maskedKey = if (config.apiKey.length > 8) config.apiKey.take(8) + "..." else "***"
+            logger.error(s"Auth failed. API key: $maskedKey")
+            throw AuthenticationException("Invalid API key")
+          case StatusCode.NotFound =>
+            logger.error(s"Endpoint not found: ${config.endpoint}/context")
+            throw ServerException(404, "Endpoint not found")
+          case StatusCode.TooManyRequests =>
+            logger.warn("Rate limit exceeded")
+            throw ServerException(429, "Rate limit exceeded")
+          case code =>
+            val body = response.body.fold(identity, identity)
+            logger.error(s"HTTP ${code.code}: $body")
+            throw ServerException(code.code, body)
+        }
+      } catch {
+        case e: SDKException => throw e
+        case e: java.net.SocketTimeoutException =>
+          logger.error(s"Timeout after ${config.timeout}ms")
+          throw NetworkException(s"Timeout after ${config.timeout}ms", Some(e))
+        case NonFatal(e) =>
+          logger.error(s"Unexpected error: ${e.getMessage}", e)
+          throw NetworkException(s"Context creation failed: ${e.getMessage}", Some(e))
       }
     }
   }
@@ -69,7 +101,8 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
     data: ContextData,
     options: ContextOptions = ContextOptions()
   ): Context = {
-    new Context(this, data, units, options)
+    logger.debug(s"Creating context with pre-fetched data (${data.experiments.length} experiments)")
+    new Context(this, data, units, options, config.eventLogger)
   }
 
   /**
@@ -82,28 +115,95 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
     goals: List[Goal]
   ): Future[Unit] = {
     Future {
-      val request = basicRequest
-        .put(uri"${config.endpoint}/context")
-        .header("X-API-Key", config.apiKey)
-        .header("X-Application", config.application)
-        .header("X-Environment", config.environment)
-        .header("Content-Type", "application/json")
-        .body(Map(
-          "units" -> units.asJson,
-          "hashed" -> hashed.asJson,
-          "exposures" -> exposures.asJson,
-          "goals" -> goals.asJson,
-          "publishedAt" -> System.currentTimeMillis().asJson
-        ).asJson.noSpaces)
-        .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
+      try {
+        logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
 
-      val response = request.send(backend)
+        val request = basicRequest
+          .put(uri"${config.endpoint}/context")
+          .header("X-API-Key", config.apiKey)
+          .header("X-Application", config.application)
+          .header("X-Environment", config.environment)
+          .header("Content-Type", "application/json")
+          .body(Map(
+            "units" -> units.asJson,
+            "hashed" -> hashed.asJson,
+            "exposures" -> exposures.asJson,
+            "goals" -> goals.asJson,
+            "publishedAt" -> System.currentTimeMillis().asJson
+          ).asJson.noSpaces)
+          .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
 
-      response.body match {
-        case Right(_) => ()
-        case Left(error) =>
-          throw new RuntimeException(s"Failed to publish events: $error")
+        val response = request.send(backend)
+
+        response.code match {
+          case StatusCode.Ok =>
+            logger.debug("Publish successful")
+            ()
+          case StatusCode.Unauthorized =>
+            logger.error("Publish failed: Invalid API key")
+            throw AuthenticationException("Invalid API key for publish")
+          case code if code.isSuccess =>
+            logger.debug(s"Publish successful with status ${code.code}")
+            ()
+          case code =>
+            val body = response.body.fold(identity, identity)
+            logger.error(s"Publish failed HTTP ${code.code}: $body")
+            throw ServerException(code.code, s"Publish failed: $body")
+        }
+      } catch {
+        case e: SDKException => throw e
+        case e: java.net.SocketTimeoutException =>
+          logger.error(s"Publish timeout after ${config.timeout}ms")
+          throw NetworkException(s"Publish timeout after ${config.timeout}ms", Some(e))
+        case NonFatal(e) =>
+          logger.error(s"Publish error: ${e.getMessage}", e)
+          throw NetworkException(s"Publish failed: ${e.getMessage}", Some(e))
       }
+    }
+  }
+
+  /**
+   * Close the SDK and release resources
+   */
+  def close(): Unit = {
+    try {
+      backend.close()
+      logger.info("SDK closed successfully")
+    } catch {
+      case NonFatal(e) =>
+        logger.error(s"Error closing SDK: ${e.getMessage}", e)
+    }
+  }
+
+  def fetchContextData(): ContextData = {
+    val request = basicRequest
+      .post(uri"${config.endpoint}/context")
+      .header("X-API-Key", config.apiKey)
+      .header("X-Application", config.application)
+      .header("X-Environment", config.environment)
+      .header("Content-Type", "application/json")
+      .body("{}")
+      .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
+
+    val response = request.send(backend)
+
+    response.code match {
+      case StatusCode.Ok =>
+        response.body match {
+          case Right(body) =>
+            parse(body).flatMap(_.as[ContextData]) match {
+              case Right(data) =>
+                logger.debug(s"Fetched context data with ${data.experiments.length} experiments")
+                data
+              case Left(parseError) =>
+                throw ParseException(s"Failed to parse context data: ${parseError.getMessage}", Some(parseError))
+            }
+          case Left(error) =>
+            throw NetworkException(s"Empty response: $error")
+        }
+      case code =>
+        val body = response.body.fold(identity, identity)
+        throw ServerException(code.code, body)
     }
   }
 

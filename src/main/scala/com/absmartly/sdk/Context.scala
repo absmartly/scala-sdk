@@ -3,6 +3,7 @@ package com.absmartly.sdk
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import io.circe.Json
+import io.circe.syntax._
 
 /**
  * Context - Main API for experiment interaction
@@ -11,19 +12,26 @@ import io.circe.Json
  */
 class Context(
   sdk: SDK,
-  initialData: ContextData,
+  initialData: Option[ContextData],
   initialUnits: Map[String, String],
-  options: ContextOptions
+  options: ContextOptions,
+  eventLogger: EventLogger = NoOpEventLogger
 )(implicit ec: ExecutionContext) {
 
+  def this(sdk: SDK, data: ContextData, units: Map[String, String], options: ContextOptions, eventLogger: EventLogger)(implicit ec: ExecutionContext) =
+    this(sdk, Some(data), units, options, eventLogger)
+
+  private val logger = Logger.get
+  private val lock = new AnyRef
+
   // State flags
-  private var _ready: Boolean = true
+  private var _ready: Boolean = initialData.isDefined
   private var _failed: Boolean = false
   private var _finalized: Boolean = false
   private var _finalizing: Boolean = false
 
   // Data
-  private var _data: ContextData = initialData
+  private var _data: ContextData = initialData.getOrElse(ContextData(experiments = List.empty))
   private val _units: mutable.Map[String, String] = mutable.Map(initialUnits.toSeq: _*)
   private val _attributes: mutable.ListBuffer[Attribute] = mutable.ListBuffer()
   private val _overrides: mutable.Map[String, Int] = mutable.Map() ++ options.overrides
@@ -43,8 +51,14 @@ class Context(
   // Assigners for each unit type
   private val _assigners: mutable.Map[String, VariantAssigner] = mutable.Map()
 
+  // Attribute sequence counter for audience re-evaluation
+  private var _attrsSeq: Int = 0
+
   // Initialize
-  _init(initialData)
+  initialData.foreach { data =>
+    _init(data)
+    eventLogger.logEvent("ready", _data.asJson)
+  }
 
   // ======================
   // State Methods
@@ -54,6 +68,17 @@ class Context(
   def isFailed(): Boolean = _failed
   def isFinalized(): Boolean = _finalized
   def isFinalizing(): Boolean = _finalizing
+
+  def setData(data: ContextData): Unit = lock.synchronized {
+    _init(data)
+    _ready = true
+    eventLogger.logEvent("ready", _data.asJson)
+  }
+
+  def setDataFailed(): Unit = lock.synchronized {
+    _failed = true
+    _ready = true
+  }
 
   def pending(): Int = _exposures.length + _goals.length
 
@@ -71,8 +96,9 @@ class Context(
   // Units Methods
   // ======================
 
-  def setUnit(unitType: String, uid: String): Unit = {
+  def setUnit(unitType: String, uid: String): Unit = lock.synchronized {
     checkNotFinalized()
+    require(unitType.trim.nonEmpty, "Unit type must not be blank")
     require(uid.trim.nonEmpty, s"Unit '$unitType' UID must not be blank")
 
     _units.get(unitType) match {
@@ -82,6 +108,7 @@ class Context(
         _units(unitType) = uid
         // Invalidate assigner cache for this unit type
         _assigners.remove(unitType)
+        logger.debug(s"Set unit '$unitType' = $uid")
     }
   }
 
@@ -97,9 +124,12 @@ class Context(
   // Attributes Methods
   // ======================
 
-  def setAttribute(name: String, value: Json): Unit = {
+  def setAttribute(name: String, value: Json): Unit = lock.synchronized {
     checkNotFinalized()
+    require(name.trim.nonEmpty, "Attribute name must not be blank")
     _attributes += Attribute(name, value, System.currentTimeMillis())
+    _attrsSeq += 1
+    logger.debug(s"Set attribute '$name'")
   }
 
   def setAttributes(attrs: Map[String, Json]): Unit = {
@@ -122,8 +152,12 @@ class Context(
   // Override Methods
   // ======================
 
-  def setOverride(experimentName: String, variant: Int): Unit = {
+  def setOverride(experimentName: String, variant: Int): Unit = lock.synchronized {
+    checkNotFinalized()
     _overrides(experimentName) = variant
+    _assignments.remove(experimentName)
+    _assigners.remove(experimentName)
+    logger.debug(s"Override '$experimentName' = $variant")
   }
 
   def setOverrides(overrides: Map[String, Int]): Unit = {
@@ -134,9 +168,11 @@ class Context(
   // Custom Assignment Methods
   // ======================
 
-  def setCustomAssignment(experimentName: String, variant: Int): Unit = {
+  def setCustomAssignment(experimentName: String, variant: Int): Unit = lock.synchronized {
     checkNotFinalized()
     _cassignments(experimentName) = variant
+    _assignments.remove(experimentName)
+    logger.debug(s"Custom assignment '$experimentName' = $variant")
   }
 
   def setCustomAssignments(assignments: Map[String, Int]): Unit = {
@@ -147,14 +183,14 @@ class Context(
   // Treatment Methods
   // ======================
 
-  def treatment(experimentName: String): Int = {
+  def treatment(experimentName: String): Int = lock.synchronized {
     checkReady(expectNotFinalized = true)
     val assignment = _assign(experimentName)
     _queueExposure(assignment)
     assignment.variant
   }
 
-  def peek(experimentName: String): Int = {
+  def peek(experimentName: String): Int = lock.synchronized {
     checkReady(expectNotFinalized = true)
     _assign(experimentName).variant
   }
@@ -184,31 +220,68 @@ class Context(
   // Custom Fields Methods (Not fully implemented - placeholder)
   // ======================
 
-  def customFieldValue(experimentName: String, fieldName: String): Option[String] = {
+  def customFieldValue(experimentName: String, fieldName: String): Option[Json] = {
     checkReady()
-    None // TODO: Implement custom fields parsing
+    _index.get(experimentName).flatMap { exp =>
+      exp.customFieldValues.flatMap { fields =>
+        fields.find(_.name == fieldName).map { field =>
+          field.`type` match {
+            case "number" =>
+              field.value.toDoubleOption match {
+                case Some(d) if d == d.toLong.toDouble => Json.fromLong(d.toLong)
+                case Some(d) => Json.fromDoubleOrNull(d)
+                case None => Json.fromString(field.value)
+              }
+            case "boolean" => Json.fromBoolean(field.value.toBoolean)
+            case "json" =>
+              io.circe.parser.parse(field.value).getOrElse(Json.fromString(field.value))
+            case _ => Json.fromString(field.value)
+          }
+        }
+      }
+    }
   }
 
   def customFieldKeys(experimentName: String): List[String] = {
     checkReady()
-    List.empty // TODO: Implement custom fields parsing
+    _index.get(experimentName).flatMap { exp =>
+      exp.customFieldValues.map(_.map(_.name))
+    }.getOrElse(List.empty)
+  }
+
+  def customFieldValueType(experimentName: String, fieldName: String): Option[String] = {
+    checkReady()
+    _index.get(experimentName).flatMap { exp =>
+      exp.customFieldValues.flatMap { fields =>
+        fields.find(_.name == fieldName).map(_.`type`)
+      }
+    }
   }
 
   // ======================
   // Goal Tracking
   // ======================
 
-  def track(goalName: String, properties: Option[Map[String, Json]] = None): Unit = {
+  def track(goalName: String, properties: Option[Map[String, Json]] = None): Unit = lock.synchronized {
     checkNotFinalized()
 
-    // Filter to only numeric properties
-    val numericProps = properties.map(Utils.filterNumericProperties)
-
-    _goals += Goal(
+    val goal = Goal(
       name = goalName,
       achievedAt = System.currentTimeMillis(),
-      properties = if (numericProps.exists(_.nonEmpty)) numericProps else None
+      properties = if (properties.exists(_.nonEmpty)) properties else None
     )
+
+    _goals += goal
+
+    eventLogger.logEvent("goal", Json.obj(
+      "name" -> Json.fromString(goal.name),
+      "achievedAt" -> Json.fromLong(goal.achievedAt),
+      "properties" -> goal.properties.map(p =>
+        Json.obj(p.toSeq: _*)
+      ).getOrElse(Json.Null)
+    ))
+
+    logger.debug(s"Tracked goal '$goalName' with ${properties.map(_.size).getOrElse(0)} properties")
   }
 
   // ======================
@@ -217,30 +290,78 @@ class Context(
 
   def publish(): Future[Unit] = {
     checkReady(expectNotFinalized = true)
-
-    val hashedUnits = _getHashedUnits()
-    val exposures = _exposures.toList
-    val goals = _goals.toList
-
-    _exposures.clear()
-    _goals.clear()
-
-    sdk.publish(hashedUnits, hashed = true, exposures, goals)
+    _flush()
   }
 
-  def finalizeContext(): Future[Unit] = {
-    if (_finalized || _finalizing) {
+  private def _flush(): Future[Unit] = {
+    val (hashedUnits, exposures, goals, attributes) = lock.synchronized {
+      (_getHashedUnits(), _exposures.toList, _goals.toList, _attributes.toList)
+    }
+
+    if (exposures.isEmpty && goals.isEmpty) {
+      logger.debug("No events to publish")
       return Future.successful(())
     }
 
-    _finalizing = true
+    logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
 
-    publish().map { _ =>
-      _finalized = true
-      _finalizing = false
+    val unitsList = hashedUnits.map { case (unitType, hashedUid) =>
+      PublishUnit(unitType, hashedUid)
+    }.toList
+
+    val publishEvent = PublishEvent(
+      hashed = true,
+      publishedAt = System.currentTimeMillis(),
+      units = unitsList,
+      exposures = exposures,
+      goals = goals,
+      attributes = if (attributes.nonEmpty) Some(attributes) else None
+    )
+
+    eventLogger.logEvent("publish", publishEvent.asJson)
+
+    lock.synchronized {
+      _exposures.clear()
+      _goals.clear()
+    }
+
+    Future.successful(())
+  }
+
+  def finalizeContext(): Future[Unit] = {
+    val shouldFinalize = lock.synchronized {
+      if (_finalized) {
+        logger.debug("Context already finalized")
+        false
+      } else if (_finalizing) {
+        logger.warn("Context already finalizing")
+        false
+      } else {
+        _finalizing = true
+        true
+      }
+    }
+
+    if (!shouldFinalize) {
+      return Future.successful(())
+    }
+
+    val pendingCount = pending()
+    logger.info(s"Finalizing context with $pendingCount pending events")
+
+    _flush().map { _ =>
+      lock.synchronized {
+        _finalized = true
+        _finalizing = false
+      }
+      eventLogger.logEvent("finalize", Json.Null)
+      logger.info("Context finalized successfully")
     }.recover { case ex =>
-      _finalizing = false
-      throw ex
+      lock.synchronized {
+        _finalizing = false
+      }
+      logger.error(s"Finalization failed, lost $pendingCount events: ${ex.getMessage}", ex)
+      throw StateException(s"Finalization failed, $pendingCount events lost", Some(ex))
     }
   }
 
@@ -248,38 +369,44 @@ class Context(
     checkReady()
     checkNotFinalized()
 
-    // Clear assignments that have changed (cache invalidation)
     val oldIndex = _index
     _init(newData)
+    eventLogger.logEvent("refresh", newData.asJson)
+
+    val toRemove = mutable.ListBuffer[String]()
+    val toReset = mutable.ListBuffer[String]()
 
     _assignments.foreach { case (name, assignment) =>
-      // Check if experiment changed
       val oldExp = oldIndex.get(name)
       val newExp = _index.get(name)
 
       val shouldClear = (oldExp, newExp) match {
         case (Some(old), Some(exp)) =>
-          // Check if experiment parameters changed
           old.id != exp.id ||
           old.iteration != exp.iteration ||
           old.fullOnVariant != exp.fullOnVariant ||
           old.trafficSplit != exp.trafficSplit
         case (Some(_), None) =>
-          // Experiment stopped
           assignment.assigned
         case (None, Some(_)) =>
-          // Experiment started
           true
         case (None, None) =>
-          // No change
           false
       }
 
-      // Don't clear if override is set
       val hasOverride = _overrides.contains(name)
 
       if (shouldClear && !hasOverride) {
-        _assignments.remove(name)
+        toRemove += name
+      } else {
+        toReset += name
+      }
+    }
+
+    toRemove.foreach(_assignments.remove)
+    toReset.foreach { name =>
+      _assignments.get(name).foreach { a =>
+        _assignments(name) = a.copy(exposed = false)
       }
     }
   }
@@ -288,15 +415,35 @@ class Context(
   // Private Methods
   // ======================
 
+  private def _parseConfig(config: Json): Option[Json] = {
+    config.asObject match {
+      case Some(_) => Some(config)
+      case None =>
+        config.asString.flatMap { str =>
+          io.circe.parser.parse(str).toOption.flatMap { parsed =>
+            if (parsed.isObject) Some(parsed) else None
+          }
+        }
+    }
+  }
+
   private def _init(data: ContextData): Unit = {
     _data = data
 
-    // Build experiment index
-    _index = data.experiments.map(exp => exp.name -> exp).toMap
+    val parsedExperiments = data.experiments.map { exp =>
+      val parsedVariants = exp.variants.map { variant =>
+        variant.config match {
+          case Some(cfg) => variant.copy(config = _parseConfig(cfg).orElse(variant.config))
+          case None => variant
+        }
+      }
+      exp.copy(variants = parsedVariants)
+    }
 
-    // Build variable index
+    _index = parsedExperiments.map(exp => exp.name -> exp).toMap
+
     val varIndex = mutable.Map[String, mutable.ListBuffer[ExperimentData]]()
-    data.experiments.foreach { exp =>
+    parsedExperiments.foreach { exp =>
       exp.variants.zipWithIndex.foreach { case (variant, idx) =>
         variant.config.foreach { config =>
           config.asObject.foreach { obj =>
@@ -323,13 +470,29 @@ class Context(
 
     val assignment = experiment match {
       case Some(exp) if hasOverride =>
-        createAssignment(exp, _overrides(experimentName), overridden = true)
+        Assignment(
+          id = exp.id,
+          name = experimentName,
+          unitType = exp.unitType,
+          iteration = exp.iteration,
+          trafficSplit = exp.trafficSplit,
+          fullOnVariant = exp.fullOnVariant,
+          variant = _overrides(experimentName),
+          assigned = false,
+          exposed = false,
+          eligible = true,
+          overridden = true,
+          audienceMismatch = false,
+          fullOn = false,
+          custom = false,
+          attrsSeq = _attrsSeq
+        )
 
       case Some(exp) =>
         val audienceMismatch = checkAudienceMismatch(exp)
 
         if (exp.audienceStrict && audienceMismatch) {
-          createAssignmentRaw(exp, 0, assigned = true, eligible = true,
+          createAssignmentRaw(exp, 0, assigned = false, eligible = true,
             audienceMismatch = true, fullOn = false, custom = false)
         } else if (exp.fullOnVariant == 0) {
           _units.get(exp.unitType) match {
@@ -375,7 +538,8 @@ class Context(
           overridden = hasOverride,
           audienceMismatch = false,
           fullOn = false,
-          custom = hasCustom
+          custom = hasCustom,
+          attrsSeq = _attrsSeq
         )
     }
 
@@ -394,14 +558,32 @@ class Context(
     } else {
       experiment match {
         case Some(exp) =>
-          assignment.id == exp.id &&
-          assignment.iteration == exp.iteration &&
-          assignment.fullOnVariant == exp.fullOnVariant &&
-          assignment.trafficSplit == exp.trafficSplit &&
-          (!hasCustom || _cassignments(assignment.name) == assignment.variant)
+          val baseValid = assignment.id == exp.id &&
+            assignment.iteration == exp.iteration &&
+            assignment.fullOnVariant == exp.fullOnVariant &&
+            assignment.trafficSplit == exp.trafficSplit &&
+            (!hasCustom || _cassignments(assignment.name) == assignment.variant)
+          baseValid && audienceMatches(exp, assignment)
         case None =>
           !assignment.assigned
       }
+    }
+  }
+
+  private def audienceMatches(exp: ExperimentData, assignment: Assignment): Boolean = {
+    exp.audience match {
+      case Some(aud) if aud.nonEmpty && aud != "null" && aud != "{}" =>
+        if (_attrsSeq > assignment.attrsSeq) {
+          val matcher = new AudienceMatcher(getAttributes())
+          val newAudienceMismatch = matcher.evaluate(Some(aud)) match {
+            case Some(result) => !result
+            case None => false
+          }
+          newAudienceMismatch == assignment.audienceMismatch
+        } else {
+          true
+        }
+      case _ => true
     }
   }
 
@@ -440,7 +622,8 @@ class Context(
       overridden = overridden,
       audienceMismatch = audienceMismatch,
       fullOn = fullOn,
-      custom = custom
+      custom = custom,
+      attrsSeq = _attrsSeq
     )
   }
 
@@ -500,7 +683,7 @@ class Context(
     if (!assignment.exposed) {
       _assignments(assignment.name) = assignment.copy(exposed = true)
 
-      _exposures += Exposure(
+      val exposure = Exposure(
         id = assignment.id,
         name = assignment.name,
         unit = assignment.unitType,
@@ -513,6 +696,22 @@ class Context(
         custom = assignment.custom,
         audienceMismatch = assignment.audienceMismatch
       )
+
+      _exposures += exposure
+
+      eventLogger.logEvent("exposure", Json.obj(
+        "id" -> Json.fromInt(exposure.id),
+        "name" -> Json.fromString(exposure.name),
+        "unit" -> (if (exposure.unit.isEmpty) Json.Null else Json.fromString(exposure.unit)),
+        "variant" -> Json.fromInt(exposure.variant),
+        "exposedAt" -> Json.fromLong(exposure.exposedAt),
+        "assigned" -> Json.fromBoolean(exposure.assigned),
+        "eligible" -> Json.fromBoolean(exposure.eligible),
+        "overridden" -> Json.fromBoolean(exposure.overridden),
+        "fullOn" -> Json.fromBoolean(exposure.fullOn),
+        "custom" -> Json.fromBoolean(exposure.custom),
+        "audienceMismatch" -> Json.fromBoolean(exposure.audienceMismatch)
+      ))
     }
   }
 
