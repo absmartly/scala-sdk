@@ -175,6 +175,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
     }
   }
 
+  @deprecated("fetchContextData() blocks the calling thread. Use fetchContextDataAsync() instead, which returns a Future[ContextData].", since = "0.1.0")
   def fetchContextData(): ContextData = {
     val request = basicRequest
       .post(uri"${config.endpoint}/context")
@@ -204,6 +205,51 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
       case code =>
         val body = response.body.fold(identity, identity)
         throw ServerException(code.code, body)
+    }
+  }
+
+  def fetchContextDataAsync(): Future[ContextData] = {
+    Future {
+      val request = basicRequest
+        .post(uri"${config.endpoint}/context")
+        .header("X-API-Key", config.apiKey)
+        .header("X-Application", config.application)
+        .header("X-Environment", config.environment)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
+
+      val response = request.send(backend)
+
+      response.code match {
+        case StatusCode.Ok =>
+          response.body match {
+            case Right(body) =>
+              parse(body).flatMap(_.as[ContextData]) match {
+                case Right(data) =>
+                  logger.debug(s"Fetched context data with ${data.experiments.length} experiments")
+                  data
+                case Left(parseError) =>
+                  throw ParseException(s"Failed to parse context data: ${parseError.getMessage}", Some(parseError))
+              }
+            case Left(error) =>
+              throw NetworkException(s"Empty response: $error")
+          }
+        case StatusCode.Unauthorized =>
+          val maskedKey = if (config.apiKey.length > 8) config.apiKey.take(8) + "..." else "***"
+          logger.error(s"Auth failed. API key: $maskedKey")
+          throw AuthenticationException("Invalid API key")
+        case StatusCode.NotFound =>
+          logger.error(s"Endpoint not found: ${config.endpoint}/context")
+          throw ServerException(404, "Endpoint not found")
+        case StatusCode.TooManyRequests =>
+          logger.warn("Rate limit exceeded")
+          throw ServerException(429, "Rate limit exceeded")
+        case code =>
+          val body = response.body.fold(identity, identity)
+          logger.error(s"HTTP ${code.code}: $body")
+          throw ServerException(code.code, body)
+      }
     }
   }
 
