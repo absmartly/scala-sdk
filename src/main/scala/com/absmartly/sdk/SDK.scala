@@ -7,11 +7,29 @@ import sttp.model.StatusCode
 import io.circe.parser._
 import io.circe.syntax._
 
-/**
- * ABsmartly SDK - Entry point for creating contexts
- *
- * CRITICAL: Must implement BOTH createContext (async) and createContextWith (sync)
- */
+object SDK {
+  def create(
+    endpoint: String,
+    apiKey: String,
+    application: String,
+    environment: String,
+    retries: Int = 5,
+    timeout: Int = 3000,
+    eventLogger: EventLogger = NoOpEventLogger
+  )(implicit ec: ExecutionContext): SDK = {
+    val config = SDKConfig(
+      endpoint = endpoint,
+      apiKey = apiKey,
+      application = application,
+      environment = environment,
+      retries = retries,
+      timeout = timeout,
+      eventLogger = eventLogger
+    )
+    new SDK(config)
+  }
+}
+
 class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
 
   private val backend = HttpURLConnectionBackend()

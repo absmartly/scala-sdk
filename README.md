@@ -46,6 +46,35 @@ Please follow the [installation](#installation) instructions before trying the f
 
 This example assumes an API Key, an Application, and an Environment have been created in the ABsmartly web console.
 
+#### Recommended: Simple Initialization
+
+```scala
+import com.absmartly.sdk.SDK
+import scala.concurrent.ExecutionContext.Implicits.global
+
+val sdk = SDK.create(
+  endpoint = "https://your-company.absmartly.io/v1",
+  apiKey = "YOUR-API-KEY",
+  application = "website",
+  environment = "development"
+)
+```
+
+#### With Optional Parameters
+
+```scala
+val sdk = SDK.create(
+  endpoint = "https://your-company.absmartly.io/v1",
+  apiKey = "YOUR-API-KEY",
+  application = "website",
+  environment = "development",
+  retries = 3,
+  timeout = 5000
+)
+```
+
+#### Alternative: Using Configuration Objects
+
 ```scala
 import com.absmartly.sdk.{SDK, SDKConfig}
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -55,21 +84,6 @@ val config = SDKConfig(
   apiKey = "YOUR-API-KEY",
   environment = "development",
   application = "website"
-)
-
-val sdk = new SDK(config)
-```
-
-#### With Optional Parameters
-
-```scala
-val config = SDKConfig(
-  endpoint = "https://your-company.absmartly.io/v1",
-  apiKey = "YOUR-API-KEY",
-  environment = "development",
-  application = "website",
-  retries = 3,
-  timeout = 5000
 )
 
 val sdk = new SDK(config)
@@ -315,11 +329,11 @@ class CustomEventLogger extends EventLogger {
 Usage:
 
 ```scala
-val config = SDKConfig(
+val sdk = SDK.create(
   endpoint = "https://your-company.absmartly.io/v1",
   apiKey = "YOUR-API-KEY",
-  environment = "development",
   application = "website",
+  environment = "development",
   eventLogger = new CustomEventLogger()
 )
 ```
@@ -354,15 +368,12 @@ import scala.concurrent.ExecutionContext
 @Singleton
 class ABSmartlyService @Inject()(config: Configuration)(implicit ec: ExecutionContext) {
 
-  private val sdk: SDK = {
-    val sdkConfig = SDKConfig(
-      endpoint = config.get[String]("absmartly.endpoint"),
-      apiKey = config.get[String]("absmartly.apiKey"),
-      application = config.get[String]("absmartly.application"),
-      environment = config.get[String]("absmartly.environment")
-    )
-    new SDK(sdkConfig)
-  }
+  private val sdk: SDK = SDK.create(
+    endpoint = config.get[String]("absmartly.endpoint"),
+    apiKey = config.get[String]("absmartly.apiKey"),
+    application = config.get[String]("absmartly.application"),
+    environment = config.get[String]("absmartly.environment")
+  )
 
   def createContext(sessionId: String): scala.concurrent.Future[Context] = {
     val units = Map("session_id" -> sessionId)
@@ -437,14 +448,12 @@ object WebServer {
     implicit val system: ActorSystem = ActorSystem("absmartly-system")
     implicit val ec: ExecutionContext = system.dispatcher
 
-    val sdkConfig = SDKConfig(
+    val sdk = SDK.create(
       endpoint = "https://your-company.absmartly.io/v1",
       apiKey = "YOUR-API-KEY",
       application = "website",
       environment = "production"
     )
-
-    val sdk = new SDK(sdkConfig)
 
     val route: Route =
       path("product") {
