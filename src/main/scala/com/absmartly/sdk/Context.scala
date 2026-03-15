@@ -26,6 +26,7 @@ class Context(
 
   @volatile private var _ready: Boolean = initialData.isDefined
   @volatile private var _failed: Boolean = false
+  @volatile private var _failedError: Option[Throwable] = None
   @volatile private var _finalized: Boolean = false
   @volatile private var _finalizing: Boolean = false
 
@@ -74,10 +75,13 @@ class Context(
     eventLogger.logEvent("ready", _data.asJson)
   }
 
-  def setDataFailed(): Unit = lock.synchronized {
+  def setDataFailed(error: Option[Throwable] = None): Unit = lock.synchronized {
     _failed = true
+    _failedError = error
     _ready = true
   }
+
+  def readyError(): Option[Throwable] = _failedError
 
   def pending(): Int = lock.synchronized {
     _exposures.length + _goals.length
@@ -250,11 +254,11 @@ class Context(
     }
   }
 
-  def customFieldKeys(experimentName: String): List[String] = {
+  def customFieldKeys(): List[String] = {
     checkReady()
-    _index.get(experimentName).flatMap { exp =>
-      exp.customFieldValues.map(_.map(_.name))
-    }.getOrElse(List.empty)
+    _index.values.flatMap { exp =>
+      exp.customFieldValues.map(_.map(_.name)).getOrElse(List.empty)
+    }.toList.distinct
   }
 
   def customFieldValueType(experimentName: String, fieldName: String): Option[String] = {

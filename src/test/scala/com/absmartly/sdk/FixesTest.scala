@@ -467,6 +467,64 @@ class FixesTest extends AnyFunSuite {
   }
 
   // ======================
+  // Phase 3.2: readyError
+  // ======================
+
+  test("readyError returns None when context loaded successfully") {
+    val context = createContext()
+    assert(context.readyError().isEmpty)
+  }
+
+  test("readyError returns the error when setDataFailed called with error") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
+    val error = new RuntimeException("data fetch failed")
+    context.setDataFailed(Some(error))
+    assert(context.readyError().contains(error))
+    assert(context.isFailed())
+  }
+
+  test("readyError returns None when setDataFailed called without error") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
+    context.setDataFailed()
+    assert(context.readyError().isEmpty)
+    assert(context.isFailed())
+  }
+
+  // ======================
+  // Phase 4.4: customFieldKeys global scope
+  // ======================
+
+  test("customFieldKeys returns all keys across all experiments") {
+    val exp1 = expTestAb.copy(
+      customFieldValues = Some(List(
+        CustomFieldValue("key1", "val1", "string"),
+        CustomFieldValue("key2", "val2", "string")
+      ))
+    )
+    val exp2 = expTestAb.copy(
+      id = 2,
+      name = "exp_test_abc",
+      customFieldValues = Some(List(
+        CustomFieldValue("key2", "val2b", "string"),
+        CustomFieldValue("key3", "val3", "string")
+      ))
+    )
+    val data = ContextData(experiments = List(exp1, exp2))
+    val context = createContext(data = data)
+    val keys = context.customFieldKeys()
+    assert(keys.contains("key1"))
+    assert(keys.contains("key2"))
+    assert(keys.contains("key3"))
+    assert(keys.distinct.length == keys.length)
+  }
+
+  test("customFieldKeys returns empty list when no experiments have custom fields") {
+    val context = createContext()
+    val keys = context.customFieldKeys()
+    assert(keys.isEmpty)
+  }
+
+  // ======================
   // Fix 4.1: setOverride works after finalize
   // ======================
 
