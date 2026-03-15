@@ -119,6 +119,19 @@ class ContextTest extends AnyFunSuite {
     sdk.createContextWith(units, data, options)
   }
 
+  def createContextWithRefreshData(
+    refreshData: ContextData,
+    units: Map[String, String] = testUnits,
+    data: ContextData = testData,
+    options: ContextOptions = ContextOptions()
+  ): Context = {
+    val mockSdk = new SDK(config) {
+      @deprecated("", since = "0.1.0")
+      override def fetchContextData(): ContextData = refreshData
+    }
+    mockSdk.createContextWith(units, data, options)
+  }
+
   test("context is ready immediately with sync creation") {
     val context = createContext()
     assert(context.isReady())
@@ -488,117 +501,115 @@ class ContextTest extends AnyFunSuite {
   }
 
   test("refresh updates context data") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newExperiment = expTestAb.copy(iteration = 2)
     val newData = ContextData(experiments = List(newExperiment, expTestAbc, expTestNotEligible, expTestFullon))
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
 
-    context.refresh(newData)
+    context.refresh()
     val data = context.data()
     assert(data.experiments.head.iteration == 2)
   }
 
   test("refresh keeps overrides") {
-    val context = createContext()
-    context.setOverride("exp_test_ab", 0)
-    assert(context.peek("exp_test_ab") == 0)
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(iteration = 2),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.setOverride("exp_test_ab", 0)
+    assert(context.peek("exp_test_ab") == 0)
+
+    context.refresh()
 
     assert(context.peek("exp_test_ab") == 0)
   }
 
   test("refresh keeps custom assignments") {
-    val context = createContext()
-    context.setCustomAssignment("exp_test_ab", 0)
-    assert(context.peek("exp_test_ab") == 0)
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(iteration = 2),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.setCustomAssignment("exp_test_ab", 0)
+    assert(context.peek("exp_test_ab") == 0)
+
+    context.refresh()
 
     assert(context.peek("exp_test_ab") == 0)
   }
 
   test("refresh clears cache when experiment iteration changes") {
-    val context = createContext()
-    val initial = context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(iteration = 2),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
 
-    val afterRefresh = context.peek("exp_test_ab")
+    context.refresh()
+
     assert(context.data().experiments.head.iteration == 2)
   }
 
   test("refresh clears cache when experiment id changes") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(id = 99),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
+
+    context.refresh()
 
     assert(context.data().experiments.head.id == 99)
   }
 
   test("refresh clears cache when fullOnVariant changes") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(fullOnVariant = 1),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
+
+    context.refresh()
 
     assert(context.data().experiments.head.fullOnVariant == 1)
   }
 
   test("refresh clears cache when trafficSplit changes") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(trafficSplit = List(0.7, 0.3)),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
+
+    context.refresh()
 
     assert(context.data().experiments.head.trafficSplit == List(0.7, 0.3))
   }
 
   test("refresh clears cache when experiment stopped (removed from list)") {
-    val context = createContext()
+    val newData = ContextData(experiments = List(expTestAbc, expTestNotEligible, expTestFullon))
+    val context = createContextWithRefreshData(refreshData = newData)
     context.peek("exp_test_ab")
     assert(context.pending() == 0)
 
-    val newData = ContextData(experiments = List(expTestAbc, expTestNotEligible, expTestFullon))
-    context.refresh(newData)
+    context.refresh()
 
     val variant = context.peek("exp_test_ab")
     assert(variant == 0)
@@ -626,20 +637,20 @@ class ContextTest extends AnyFunSuite {
       audience = None
     )
 
-    val context = createContext()
     val newData = ContextData(experiments = List(newExp) ++ testData.experiments)
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.refresh()
 
     val variant = context.peek("exp_test_new")
     assert(variant >= 0)
   }
 
   test("refresh re-queues exposures even when experiment unchanged") {
-    val context = createContext()
+    val context = createContextWithRefreshData(refreshData = testData)
     context.treatment("exp_test_ab")
     assert(context.pending() == 1)
 
-    context.refresh(testData)
+    context.refresh()
 
     context.treatment("exp_test_ab")
     assert(context.pending() == 2)
