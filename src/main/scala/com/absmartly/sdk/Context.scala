@@ -24,11 +24,10 @@ class Context(
   private val logger = Logger.get
   private val lock = new AnyRef
 
-  // State flags
-  private var _ready: Boolean = initialData.isDefined
-  private var _failed: Boolean = false
-  private var _finalized: Boolean = false
-  private var _finalizing: Boolean = false
+  @volatile private var _ready: Boolean = initialData.isDefined
+  @volatile private var _failed: Boolean = false
+  @volatile private var _finalized: Boolean = false
+  @volatile private var _finalizing: Boolean = false
 
   // Data
   private var _data: ContextData = initialData.getOrElse(ContextData(experiments = List.empty))
@@ -80,14 +79,16 @@ class Context(
     _ready = true
   }
 
-  def pending(): Int = _exposures.length + _goals.length
+  def pending(): Int = lock.synchronized {
+    _exposures.length + _goals.length
+  }
 
-  def data(): ContextData = {
+  def data(): ContextData = lock.synchronized {
     checkReady()
     _data
   }
 
-  def experiments(): List[String] = {
+  def experiments(): List[String] = lock.synchronized {
     checkReady()
     _data.experiments.map(_.name)
   }
@@ -108,7 +109,8 @@ class Context(
         _units(unitType) = uid
         // Invalidate assigner cache for this unit type
         _assigners.remove(unitType)
-        logger.debug(s"Set unit '$unitType' = $uid")
+        val maskedUid = if (uid.length > 4) s"***${uid.takeRight(4)}" else "***"
+        logger.debug(s"Set unit '$unitType' = $maskedUid")
     }
   }
 
@@ -116,9 +118,13 @@ class Context(
     units.foreach { case (unitType, uid) => setUnit(unitType, uid) }
   }
 
-  def getUnit(unitType: String): Option[String] = _units.get(unitType)
+  def getUnit(unitType: String): Option[String] = lock.synchronized {
+    _units.get(unitType)
+  }
 
-  def getUnits(): Map[String, String] = _units.toMap
+  def getUnits(): Map[String, String] = lock.synchronized {
+    _units.toMap
+  }
 
   // ======================
   // Attributes Methods
@@ -136,11 +142,11 @@ class Context(
     attrs.foreach { case (name, value) => setAttribute(name, value) }
   }
 
-  def getAttribute(name: String): Option[Json] = {
+  def getAttribute(name: String): Option[Json] = lock.synchronized {
     _attributes.reverseIterator.find(_.name == name).map(_.value)
   }
 
-  def getAttributes(): Map[String, Json] = {
+  def getAttributes(): Map[String, Json] = lock.synchronized {
     val result = mutable.Map[String, Json]()
     _attributes.foreach { attr =>
       result(attr.name) = attr.value
@@ -153,10 +159,8 @@ class Context(
   // ======================
 
   def setOverride(experimentName: String, variant: Int): Unit = lock.synchronized {
-    checkNotFinalized()
     _overrides(experimentName) = variant
     _assignments.remove(experimentName)
-    _assigners.remove(experimentName)
     logger.debug(s"Override '$experimentName' = $variant")
   }
 
@@ -199,12 +203,12 @@ class Context(
   // Variable Methods
   // ======================
 
-  def variableValue(key: String, defaultValue: String): String = {
+  def variableValue(key: String, defaultValue: String): String = lock.synchronized {
     checkReady(expectNotFinalized = true)
     _variableValue(key, defaultValue, queueExposure = true)
   }
 
-  def peekVariableValue(key: String, defaultValue: String): String = {
+  def peekVariableValue(key: String, defaultValue: String): String = lock.synchronized {
     checkReady(expectNotFinalized = true)
     _variableValue(key, defaultValue, queueExposure = false)
   }
@@ -232,7 +236,11 @@ class Context(
                 case Some(d) => Json.fromDoubleOrNull(d)
                 case None => Json.fromString(field.value)
               }
-            case "boolean" => Json.fromBoolean(field.value.toBoolean)
+            case "boolean" =>
+              scala.util.Try(field.value.toBoolean).toOption match {
+                case Some(b) => Json.fromBoolean(b)
+                case None => Json.fromString(field.value)
+              }
             case "json" =>
               io.circe.parser.parse(field.value).getOrElse(Json.fromString(field.value))
             case _ => Json.fromString(field.value)
@@ -300,32 +308,36 @@ class Context(
 
     if (exposures.isEmpty && goals.isEmpty) {
       logger.debug("No events to publish")
-      return Future.successful(())
+      Future.successful(())
+    } else {
+      logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
+
+      val unitsList = hashedUnits.map { case (unitType, hashedUid) =>
+        PublishUnit(unitType, hashedUid)
+      }.toList
+
+      val publishEvent = PublishEvent(
+        hashed = true,
+        publishedAt = System.currentTimeMillis(),
+        units = unitsList,
+        exposures = exposures,
+        goals = goals,
+        attributes = if (attributes.nonEmpty) Some(attributes) else None
+      )
+
+      eventLogger.logEvent("publish", publishEvent.asJson)
+
+      val unitsMap = hashedUnits
+      val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
+
+      sdk.publish(unitsMap, true, exposures, goals, attrOpt).map { _ =>
+        lock.synchronized {
+          _exposures --= exposures
+          _goals --= goals
+        }
+        eventLogger.logEvent("publish_success", publishEvent.asJson)
+      }
     }
-
-    logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
-
-    val unitsList = hashedUnits.map { case (unitType, hashedUid) =>
-      PublishUnit(unitType, hashedUid)
-    }.toList
-
-    val publishEvent = PublishEvent(
-      hashed = true,
-      publishedAt = System.currentTimeMillis(),
-      units = unitsList,
-      exposures = exposures,
-      goals = goals,
-      attributes = if (attributes.nonEmpty) Some(attributes) else None
-    )
-
-    eventLogger.logEvent("publish", publishEvent.asJson)
-
-    lock.synchronized {
-      _exposures.clear()
-      _goals.clear()
-    }
-
-    Future.successful(())
   }
 
   def finalizeContext(): Future[Unit] = {
@@ -365,7 +377,12 @@ class Context(
     }
   }
 
-  def refresh(newData: ContextData): Unit = {
+  def refresh(): Unit = {
+    val newData = sdk.fetchContextData()
+    refresh(newData)
+  }
+
+  def refresh(newData: ContextData): Unit = lock.synchronized {
     checkReady()
     checkNotFinalized()
 
