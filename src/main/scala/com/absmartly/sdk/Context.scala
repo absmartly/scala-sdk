@@ -93,7 +93,7 @@ class Context(
   }
 
   def experiments(): List[String] = lock.synchronized {
-    checkReady()
+    if (!_ready) return List.empty
     _data.experiments.map(_.name)
   }
 
@@ -192,14 +192,16 @@ class Context(
   // ======================
 
   def treatment(experimentName: String): Int = lock.synchronized {
-    checkReady(expectNotFinalized = true)
+    if (!_ready) return 0
+    if (_finalized || _finalizing) return 0
     val assignment = _assign(experimentName)
     _queueExposure(assignment)
     assignment.variant
   }
 
   def peek(experimentName: String): Int = lock.synchronized {
-    checkReady(expectNotFinalized = true)
+    if (!_ready) return 0
+    if (_finalized || _finalizing) return 0
     _assign(experimentName).variant
   }
 
@@ -208,17 +210,19 @@ class Context(
   // ======================
 
   def variableValue(key: String, defaultValue: String): String = lock.synchronized {
-    checkReady(expectNotFinalized = true)
+    if (!_ready) return defaultValue
+    if (_finalized || _finalizing) return defaultValue
     _variableValue(key, defaultValue, queueExposure = true)
   }
 
   def peekVariableValue(key: String, defaultValue: String): String = lock.synchronized {
-    checkReady(expectNotFinalized = true)
+    if (!_ready) return defaultValue
+    if (_finalized || _finalizing) return defaultValue
     _variableValue(key, defaultValue, queueExposure = false)
   }
 
   def variableKeys(): Map[String, List[String]] = {
-    checkReady()
+    if (!_ready) return Map.empty
     _indexVariables.map { case (key, exps) =>
       key -> exps.map(_.name)
     }
@@ -229,7 +233,7 @@ class Context(
   // ======================
 
   def customFieldValue(experimentName: String, fieldName: String): Option[Json] = {
-    checkReady()
+    if (!_ready) return None
     _index.get(experimentName).flatMap { exp =>
       exp.customFieldValues.flatMap { fields =>
         fields.find(_.name == fieldName).map { field =>
@@ -255,14 +259,14 @@ class Context(
   }
 
   def customFieldKeys(): List[String] = {
-    checkReady()
+    if (!_ready) return List.empty
     _index.values.flatMap { exp =>
       exp.customFieldValues.map(_.map(_.name)).getOrElse(List.empty)
     }.toList.distinct
   }
 
   def customFieldValueType(experimentName: String, fieldName: String): Option[String] = {
-    checkReady()
+    if (!_ready) return None
     _index.get(experimentName).flatMap { exp =>
       exp.customFieldValues.flatMap { fields =>
         fields.find(_.name == fieldName).map(_.`type`)

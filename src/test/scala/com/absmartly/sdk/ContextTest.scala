@@ -687,44 +687,66 @@ class ContextTest extends AnyFunSuite {
     }
   }
 
-  test("treatment throws after finalized") {
+  test("treatment returns 0 after finalized") {
     val context = createContext()
     val field = context.getClass.getDeclaredField("_finalized")
     field.setAccessible(true)
     field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.treatment("exp_test_ab")
-    }
+    assert(context.treatment("exp_test_ab") == 0)
   }
 
-  test("peek throws after finalized") {
+  test("peek returns 0 after finalized") {
     val context = createContext()
     val field = context.getClass.getDeclaredField("_finalized")
     field.setAccessible(true)
     field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.peek("exp_test_ab")
-    }
+    assert(context.peek("exp_test_ab") == 0)
   }
 
-  test("variableValue throws after finalized") {
+  test("variableValue returns defaultValue after finalized") {
     val context = createContext()
     val field = context.getClass.getDeclaredField("_finalized")
     field.setAccessible(true)
     field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.variableValue("key", "default")
-    }
+    assert(context.variableValue("key", "default") == "default")
   }
 
-  test("peekVariableValue throws after finalized") {
+  test("peekVariableValue returns defaultValue after finalized") {
     val context = createContext()
     val field = context.getClass.getDeclaredField("_finalized")
     field.setAccessible(true)
     field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.peekVariableValue("key", "default")
-    }
+    assert(context.peekVariableValue("key", "default") == "default")
+  }
+
+  test("treatment returns 0 when not ready") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(context.treatment("exp_test_ab") == 0)
+  }
+
+  test("peek returns 0 when not ready") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(context.peek("exp_test_ab") == 0)
+  }
+
+  test("variableValue returns defaultValue when not ready") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(context.variableValue("key", "default") == "default")
+  }
+
+  test("peekVariableValue returns defaultValue when not ready") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(context.peekVariableValue("key", "default") == "default")
+  }
+
+  test("experiments returns empty list when not ready") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(context.experiments() == List.empty)
+  }
+
+  test("variableKeys returns empty map when not ready") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(context.variableKeys() == Map.empty)
   }
 
   test("track throws after finalized") {
