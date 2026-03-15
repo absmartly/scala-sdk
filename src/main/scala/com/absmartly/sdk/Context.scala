@@ -104,11 +104,11 @@ class Context(
   def setUnit(unitType: String, uid: String): Unit = lock.synchronized {
     checkNotFinalized()
     require(unitType.trim.nonEmpty, "Unit type must not be blank")
-    require(uid.trim.nonEmpty, s"Unit '$unitType' UID must not be blank")
+    require(uid.trim.nonEmpty, s"Unit '$unitType' UID must not be blank.")
 
     _units.get(unitType) match {
       case Some(existing) if existing != uid =>
-        throw new IllegalStateException(s"Unit '$unitType' UID already set")
+        throw new IllegalStateException(s"Unit '$unitType' UID already set.")
       case _ =>
         _units(unitType) = uid
         // Invalidate assigner cache for this unit type
@@ -343,6 +343,8 @@ class Context(
       }
     }
   }
+
+  def close(): Future[Unit] = finalizeContext()
 
   def finalizeContext(): Future[Unit] = {
     val shouldFinalize = lock.synchronized {
@@ -744,7 +746,7 @@ class Context(
 
   private def checkReady(expectNotFinalized: Boolean = false): Unit = {
     if (!_ready) {
-      throw new IllegalStateException("Context is not ready")
+      throw new IllegalStateException("ABsmartly Context is not yet ready.")
     }
     if (expectNotFinalized) {
       checkNotFinalized()
@@ -753,10 +755,10 @@ class Context(
 
   private def checkNotFinalized(): Unit = {
     if (_finalized) {
-      throw new IllegalStateException("Context is finalized")
+      throw new IllegalStateException("ABsmartly Context is finalized.")
     }
     if (_finalizing) {
-      throw new IllegalStateException("Context is finalizing")
+      throw new IllegalStateException("ABsmartly Context is finalized.")
     }
   }
 }

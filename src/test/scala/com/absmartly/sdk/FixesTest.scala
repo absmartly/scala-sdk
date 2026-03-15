@@ -540,4 +540,58 @@ class FixesTest extends AnyFunSuite {
     }
     assert(!threw, "setOverride should not throw after finalize")
   }
+
+  // ======================
+  // Phase 4.2: close/finalize aliases
+  // ======================
+
+  test("close is alias for finalizeContext") {
+    val context = createContext()
+    assert(!context.isFinalized())
+    Await.result(context.close(), 5.seconds)
+    assert(context.isFinalized())
+  }
+
+  test("isFinalized and isFinalizing exist") {
+    val context = createContext()
+    assert(!context.isFinalized())
+    assert(!context.isFinalizing())
+  }
+
+  // ======================
+  // Phase 4.3: standardized error messages
+  // ======================
+
+  test("not ready error message is standardized") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
+    val ex = intercept[IllegalStateException] {
+      context.treatment("exp_test_ab")
+    }
+    assert(ex.getMessage == "ABsmartly Context is not yet ready.")
+  }
+
+  test("finalized error message is standardized") {
+    val context = createContext()
+    Await.result(context.close(), 5.seconds)
+    val ex = intercept[IllegalStateException] {
+      context.treatment("exp_test_ab")
+    }
+    assert(ex.getMessage == "ABsmartly Context is finalized.")
+  }
+
+  test("unit UID blank error message is standardized") {
+    val context = createContext(units = Map.empty)
+    val ex = intercept[IllegalArgumentException] {
+      context.setUnit("session_id", "")
+    }
+    assert(ex.getMessage.contains("UID must not be blank."))
+  }
+
+  test("unit UID already set error message is standardized") {
+    val context = createContext()
+    val ex = intercept[IllegalStateException] {
+      context.setUnit("session_id", "different-uid")
+    }
+    assert(ex.getMessage.contains("UID already set."))
+  }
 }
