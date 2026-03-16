@@ -345,7 +345,7 @@ class Context(
       val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
 
       sdk.publish(unitsMap, true, exposures, goals, attrOpt).map { _ =>
-        eventLogger.logEvent("publish_success", publishEvent.asJson)
+        ()
       }.recover { case ex =>
         logger.error(s"Publish failed: ${ex.getMessage}", ex)
       }
@@ -426,10 +426,11 @@ class Context(
       }
 
       val hasOverride = _overrides.contains(name)
+      val hasCustom = _cassignments.contains(name)
 
       if (shouldClear && !hasOverride) {
         toRemove += name
-      } else if (!hasOverride) {
+      } else if (!hasOverride && !hasCustom) {
         toReset += name
       }
     }
