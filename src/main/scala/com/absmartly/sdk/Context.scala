@@ -311,7 +311,13 @@ class Context(
 
   private def _flush(): Future[Unit] = {
     val (hashedUnits, exposures, goals, attributes) = lock.synchronized {
-      (_getHashedUnits(), _exposures.toList, _goals.toList, _attributes.toList)
+      val e = _exposures.toList
+      val g = _goals.toList
+      if (e.nonEmpty || g.nonEmpty) {
+        _exposures.clear()
+        _goals.clear()
+      }
+      (_getHashedUnits(), e, g, _attributes.toList)
     }
 
     if (exposures.isEmpty && goals.isEmpty) {
@@ -339,11 +345,9 @@ class Context(
       val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
 
       sdk.publish(unitsMap, true, exposures, goals, attrOpt).map { _ =>
-        lock.synchronized {
-          _exposures --= exposures
-          _goals --= goals
-        }
         eventLogger.logEvent("publish_success", publishEvent.asJson)
+      }.recover { case ex =>
+        logger.error(s"Publish failed: ${ex.getMessage}", ex)
       }
     }
   }
@@ -380,10 +384,10 @@ class Context(
       logger.info("Context finalized successfully")
     }.recover { case ex =>
       lock.synchronized {
+        _finalized = true
         _finalizing = false
       }
-      logger.error(s"Finalization failed, lost $pendingCount events: ${ex.getMessage}", ex)
-      throw StateException(s"Finalization failed, $pendingCount events lost", Some(ex))
+      logger.error(s"Finalization failed: ${ex.getMessage}", ex)
     }
   }
 
