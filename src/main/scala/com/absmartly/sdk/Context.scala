@@ -425,7 +425,7 @@ class Context(
 
       if (shouldClear && !hasOverride) {
         toRemove += name
-      } else {
+      } else if (!hasOverride) {
         toReset += name
       }
     }
