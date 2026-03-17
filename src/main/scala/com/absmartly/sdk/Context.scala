@@ -346,8 +346,13 @@ class Context(
 
       sdk.publish(unitsMap, true, exposures, goals, attrOpt).map { _ =>
         ()
-      }.recover { case ex =>
+      }.recoverWith { case ex =>
+        lock.synchronized {
+          _exposures.prependAll(exposures)
+          _goals.prependAll(goals)
+        }
         logger.error(s"Publish failed: ${ex.getMessage}", ex)
+        Future.failed(ex)
       }
     }
   }
@@ -428,10 +433,8 @@ class Context(
       val hasOverride = _overrides.contains(name)
       val hasCustom = _cassignments.contains(name)
 
-      if (shouldClear && !hasOverride) {
+      if (shouldClear && !hasOverride && !hasCustom) {
         toRemove += name
-      } else if (shouldClear && !hasCustom) {
-        toReset += name
       }
     }
 

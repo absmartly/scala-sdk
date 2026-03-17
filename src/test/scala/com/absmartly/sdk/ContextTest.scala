@@ -653,7 +653,7 @@ class ContextTest extends AnyFunSuite {
     context.refresh()
 
     context.treatment("exp_test_ab")
-    assert(context.pending() == 2)
+    assert(context.pending() == 1)
   }
 
   test("setOverride does not check finalized state") {
@@ -670,9 +670,7 @@ class ContextTest extends AnyFunSuite {
 
   test("setCustomAssignment throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.setCustomAssignment("exp_test_ab", 1)
     }
@@ -680,9 +678,7 @@ class ContextTest extends AnyFunSuite {
 
   test("setUnit throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.setUnit("new_unit", "value")
     }
@@ -690,9 +686,7 @@ class ContextTest extends AnyFunSuite {
 
   test("setAttribute throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.setAttribute("attr", Json.fromInt(1))
     }
@@ -700,33 +694,25 @@ class ContextTest extends AnyFunSuite {
 
   test("treatment returns 0 after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assert(context.treatment("exp_test_ab") == 0)
   }
 
   test("peek returns 0 after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assert(context.peek("exp_test_ab") == 0)
   }
 
   test("variableValue returns defaultValue after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assert(context.variableValue("key", "default") == "default")
   }
 
   test("peekVariableValue returns defaultValue after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assert(context.peekVariableValue("key", "default") == "default")
   }
 
@@ -762,9 +748,7 @@ class ContextTest extends AnyFunSuite {
 
   test("track throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.track("goal")
     }
@@ -772,9 +756,7 @@ class ContextTest extends AnyFunSuite {
 
   test("publish throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.publish()
     }
@@ -782,9 +764,7 @@ class ContextTest extends AnyFunSuite {
 
   test("refresh throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.refresh(testData)
     }
