@@ -344,7 +344,11 @@ class Context(
       val unitsMap = hashedUnits
       val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
 
-      sdk.publish(unitsMap, true, exposures, goals, attrOpt).map { _ =>
+      val publishFuture = sdk.getConfig.publishHandler match {
+        case Some(handler) => handler(unitsMap, true, exposures, goals, attrOpt)
+        case None => sdk.publish(unitsMap, true, exposures, goals, attrOpt)
+      }
+      publishFuture.map { _ =>
         ()
       }.recoverWith { case ex =>
         lock.synchronized {
