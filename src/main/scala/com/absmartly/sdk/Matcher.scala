@@ -2,6 +2,7 @@ package com.absmartly.sdk
 
 import io.circe.Json
 import com.absmartly.sdk.jsonexpr.Evaluator
+import scala.util.control.NonFatal
 
 /**
  * Audience matcher using JSON expression evaluator
@@ -56,13 +57,7 @@ class AudienceMatcher(vars: Map[String, Json]) {
               Some(true)
           }
         } catch {
-          case e: StackOverflowError =>
-            logger.error(s"Stack overflow evaluating audience: $audienceStr", e)
-            None
-          case e: OutOfMemoryError =>
-            logger.error(s"Out of memory evaluating audience: $audienceStr", e)
-            None
-          case e: Exception =>
+          case NonFatal(e) =>
             logger.error(s"Audience evaluation error: ${e.getMessage}\nAudience: $audienceStr", e)
             None
         }

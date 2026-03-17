@@ -2,8 +2,6 @@ package com.absmartly.sdk.jsonexpr
 
 import io.circe.Json
 import com.absmartly.sdk.{Utils, Logger}
-import scala.concurrent.{Await, ExecutionContext, Future, TimeoutException}
-import scala.concurrent.duration._
 import scala.util.{Try, Success, Failure}
 
 /**
@@ -20,9 +18,9 @@ object Evaluator {
 
   private val REGEX_TIMEOUT_MS = 100L
   private val MAX_PATTERN_LENGTH = 500
+  private val MAX_INPUT_LENGTH = 25000
   private val MAX_ARRAY_SIZE_WARNING = 1000
 
-  private implicit val ec: ExecutionContext = ExecutionContext.global
   private val logger = Logger.get
 
   /**
@@ -262,21 +260,25 @@ object Evaluator {
           if (patternStr.length > MAX_PATTERN_LENGTH) {
             logger.warn(s"Regex pattern too long: ${patternStr.length} chars (max $MAX_PATTERN_LENGTH)")
             false
+          } else if (textStr.length > MAX_INPUT_LENGTH) {
+            logger.warn(s"Regex input too long: ${textStr.length} chars (max $MAX_INPUT_LENGTH)")
+            false
           } else {
             Try(patternStr.r) match {
               case Success(regex) =>
-                try {
-                  val future = Future {
-                    regex.findFirstIn(textStr).isDefined
-                  }
-                  Await.result(future, REGEX_TIMEOUT_MS.milliseconds)
-                } catch {
-                  case _: TimeoutException =>
-                    logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='$patternStr'")
-                    false
-                  case e: Exception =>
-                    logger.error(s"Regex execution error: ${e.getMessage}, pattern='$patternStr'", e)
-                    false
+                @volatile var matched = false
+                val thread = new Thread(() => {
+                  matched = regex.findFirstIn(textStr).isDefined
+                })
+                thread.setDaemon(true)
+                thread.start()
+                thread.join(REGEX_TIMEOUT_MS)
+                if (thread.isAlive) {
+                  thread.interrupt()
+                  logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='$patternStr'")
+                  false
+                } else {
+                  matched
                 }
               case Failure(e) =>
                 logger.warn(s"Invalid regex pattern: '$patternStr' - ${e.getMessage}")

@@ -78,7 +78,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
                 throw NetworkException(s"Empty response: $error")
             }
           case StatusCode.Unauthorized =>
-            val maskedKey = if (config.apiKey.length > 8) config.apiKey.take(8) + "..." else "***"
+            val maskedKey = if (config.apiKey.length > 4) s"***${config.apiKey.takeRight(4)}" else "***"
             logger.error(s"Auth failed. API key: $maskedKey")
             throw AuthenticationException("Invalid API key")
           case StatusCode.NotFound =>
@@ -130,11 +130,26 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
     units: Map[String, String],
     hashed: Boolean,
     exposures: List[Exposure],
-    goals: List[Goal]
+    goals: List[Goal],
+    attributes: Option[List[Attribute]] = None
   ): Future[Unit] = {
     Future {
       try {
         logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
+
+        import PublishEvent.attributeEncoder
+
+        val baseFields = Map(
+          "units" -> units.asJson,
+          "hashed" -> hashed.asJson,
+          "exposures" -> exposures.asJson,
+          "goals" -> goals.asJson,
+          "publishedAt" -> System.currentTimeMillis().asJson
+        )
+        val fields = attributes match {
+          case Some(attrs) if attrs.nonEmpty => baseFields + ("attributes" -> attrs.asJson)
+          case _ => baseFields
+        }
 
         val request = basicRequest
           .put(uri"${config.endpoint}/context")
@@ -142,13 +157,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
           .header("X-Application", config.application)
           .header("X-Environment", config.environment)
           .header("Content-Type", "application/json")
-          .body(Map(
-            "units" -> units.asJson,
-            "hashed" -> hashed.asJson,
-            "exposures" -> exposures.asJson,
-            "goals" -> goals.asJson,
-            "publishedAt" -> System.currentTimeMillis().asJson
-          ).asJson.noSpaces)
+          .body(fields.asJson.noSpaces)
           .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
 
         val response = request.send(backend)
@@ -254,7 +263,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
               throw NetworkException(s"Empty response: $error")
           }
         case StatusCode.Unauthorized =>
-          val maskedKey = if (config.apiKey.length > 8) config.apiKey.take(8) + "..." else "***"
+          val maskedKey = if (config.apiKey.length > 4) s"***${config.apiKey.takeRight(4)}" else "***"
           logger.error(s"Auth failed. API key: $maskedKey")
           throw AuthenticationException("Invalid API key")
         case StatusCode.NotFound =>

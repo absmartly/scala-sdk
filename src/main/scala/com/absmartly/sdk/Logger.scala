@@ -47,7 +47,7 @@ class NoOpLogger extends Logger {
 }
 
 object Logger {
-  private var instance: Logger = new NoOpLogger()
+  @volatile private var instance: Logger = new NoOpLogger()
 
   def setLogger(logger: Logger): Unit = {
     instance = logger
