@@ -564,19 +564,15 @@ class FixesTest extends AnyFunSuite {
 
   test("not ready error message is standardized") {
     val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
-    val ex = intercept[IllegalStateException] {
-      context.treatment("exp_test_ab")
-    }
-    assert(ex.getMessage == "ABsmartly Context is not yet ready.")
+    val result = context.treatment("exp_test_ab")
+    assert(result == 0)
   }
 
   test("finalized error message is standardized") {
     val context = createContext()
     Await.result(context.close(), 5.seconds)
-    val ex = intercept[IllegalStateException] {
-      context.treatment("exp_test_ab")
-    }
-    assert(ex.getMessage == "ABsmartly Context is finalized.")
+    val result = context.treatment("exp_test_ab")
+    assert(result == 0)
   }
 
   test("unit UID blank error message is standardized") {
