@@ -14,7 +14,7 @@ case class SDKConfig private(
   retries: Int,
   timeout: Int,
   eventLogger: EventLogger,
-  publishHandler: Option[(Map[String, String], Boolean, List[Exposure], List[Goal], Option[List[Attribute]]) => scala.concurrent.Future[Unit]] = None
+  publisher: Option[ContextPublisher] = None
 ) {
   override def toString: String = {
     val maskedKey = if (apiKey.length > 4) s"***${apiKey.takeRight(4)}" else "***"
@@ -32,7 +32,7 @@ object SDKConfig {
     retries: Int = 5,
     timeout: Int = 3000,
     eventLogger: EventLogger = NoOpEventLogger,
-    publishHandler: Option[(Map[String, String], Boolean, List[Exposure], List[Goal], Option[List[Attribute]]) => scala.concurrent.Future[Unit]] = None
+    publisher: Option[ContextPublisher] = None
   ): SDKConfig = {
     require(endpoint.nonEmpty, "endpoint must not be empty")
     require(apiKey.nonEmpty, "apiKey must not be empty")
@@ -41,7 +41,7 @@ object SDKConfig {
     require(retries >= 0, "retries must be >= 0")
     require(timeout > 0, "timeout must be > 0")
 
-    new SDKConfig(endpoint, apiKey, application, environment, retries, timeout, eventLogger, publishHandler)
+    new SDKConfig(endpoint, apiKey, application, environment, retries, timeout, eventLogger, publisher)
   }
 }
 

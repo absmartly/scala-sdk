@@ -344,8 +344,8 @@ class Context(
       val unitsMap = hashedUnits
       val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
 
-      val publishFuture = sdk.getConfig.publishHandler match {
-        case Some(handler) => handler(unitsMap, true, exposures, goals, attrOpt)
+      val publishFuture = sdk.getConfig.publisher match {
+        case Some(publisher) => publisher.publish(unitsMap, true, exposures, goals, attrOpt)
         case None => sdk.publish(unitsMap, true, exposures, goals, attrOpt)
       }
       publishFuture.map { _ =>
