@@ -229,13 +229,13 @@ class EvaluatorTest extends AnyFunSuite {
   }
 
   test("in returns true when array contains value") {
-    val expr = parse("""{"in": [{"value": 2}, {"value": [1, 2, 3]}]}""").toOption.get
+    val expr = parse("""{"in": [{"value": [1, 2, 3]}, {"value": 2}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
     assert(result.asBoolean.contains(true))
   }
 
   test("in returns false when array doesn't contain value") {
-    val expr = parse("""{"in": [{"value": 5}, {"value": [1, 2, 3]}]}""").toOption.get
+    val expr = parse("""{"in": [{"value": [1, 2, 3]}, {"value": 5}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
     assert(result.asBoolean.contains(false))
   }

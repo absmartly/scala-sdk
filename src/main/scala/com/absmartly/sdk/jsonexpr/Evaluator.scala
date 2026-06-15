@@ -62,7 +62,8 @@ object Evaluator {
       case "gte" => evaluateGte(args, vars)
       case "lt" => evaluateLt(args, vars)
       case "lte" => evaluateLte(args, vars)
-      case "in" => evaluateIn(args, vars)
+      case "in" => evaluateContains(args, vars)
+      case "contains" => evaluateContains(args, vars)
       case "match" => evaluateMatch(args, vars)
       case _ =>
         logger.error(s"Unknown operator '$op' with args: ${args.noSpaces}")
@@ -217,20 +218,22 @@ object Evaluator {
     }
   }
 
-  // IN operator: contains check
-  private def evaluateIn(args: Json, vars: Map[String, Json]): Json = {
+  // CONTAINS operator (also registered under the legacy alias "in").
+  // Operand order is haystack-first: [haystack, needle]. This matches the
+  // collector and the other ABsmartly SDKs.
+  private def evaluateContains(args: Json, vars: Map[String, Json]): Json = {
     args.asArray match {
       case Some(arr) if arr.length >= 2 =>
-        val needle = evaluate(arr(0), vars)
-        val haystack = evaluate(arr(1), vars)
+        val haystack = evaluate(arr(0), vars)
+        val needle = evaluate(arr(1), vars)
 
-        // Check if needle is in haystack
+        // Check if haystack contains needle
         val result: Boolean = (needle, haystack) match {
           case (n, h) if n.isNull || h.isNull => false
           case (n, h) if h.isArray =>
             val haystackArray = h.asArray.getOrElse(Vector.empty)
             if (haystackArray.size > MAX_ARRAY_SIZE_WARNING) {
-              logger.warn(s"Large array in 'in' operator: ${haystackArray.size} elements (performance warning)")
+              logger.warn(s"Large array in 'contains' operator: ${haystackArray.size} elements (performance warning)")
             }
             haystackArray.contains(n)
           case (n, h) if h.isString && n.isString =>
