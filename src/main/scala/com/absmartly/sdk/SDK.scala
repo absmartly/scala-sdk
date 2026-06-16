@@ -49,14 +49,12 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
     Future {
       try {
         val request = basicRequest
-          .post(uri"${config.endpoint}/context")
+          .get(uri"${config.endpoint}/context?application=${config.application}&environment=${config.environment}")
           .header("X-API-Key", config.apiKey)
           .header("X-Application", config.application)
           .header("X-Environment", config.environment)
+          .header("X-Agent", "absmartly-scala-sdk")
           .header("Content-Type", "application/json")
-          .body(Map(
-            "units" -> units.asJson
-          ).asJson.noSpaces)
           .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
 
         val response = request.send(backend)
@@ -205,12 +203,12 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
   @deprecated("fetchContextData() blocks the calling thread. Use fetchContextDataAsync() instead, which returns a Future[ContextData].", since = "0.1.0")
   def fetchContextData(): ContextData = {
     val request = basicRequest
-      .post(uri"${config.endpoint}/context")
+      .get(uri"${config.endpoint}/context?application=${config.application}&environment=${config.environment}")
       .header("X-API-Key", config.apiKey)
       .header("X-Application", config.application)
       .header("X-Environment", config.environment)
+      .header("X-Agent", "absmartly-scala-sdk")
       .header("Content-Type", "application/json")
-      .body("{}")
       .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
 
     val response = request.send(backend)
@@ -238,12 +236,12 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
   def fetchContextDataAsync(): Future[ContextData] = {
     Future {
       val request = basicRequest
-        .post(uri"${config.endpoint}/context")
+        .get(uri"${config.endpoint}/context?application=${config.application}&environment=${config.environment}")
         .header("X-API-Key", config.apiKey)
         .header("X-Application", config.application)
         .header("X-Environment", config.environment)
+        .header("X-Agent", "absmartly-scala-sdk")
         .header("Content-Type", "application/json")
-        .body("{}")
         .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))
 
       val response = request.send(backend)
