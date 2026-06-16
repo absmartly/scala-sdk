@@ -149,10 +149,16 @@ object Evaluator {
         val lhs = evaluate(arr(0), vars)
         val rhs = evaluate(arr(1), vars)
 
-        Utils.compare(lhs, rhs) match {
-          case Some(0) => Json.fromBoolean(true)
-          case Some(_) => Json.fromBoolean(false)
-          case None => Json.fromBoolean(lhs.isNull && rhs.isNull)
+        // A null operand short-circuits to null (canonical: eq does not treat
+        // null == null as a match), matching the other SDKs and the collector.
+        if (lhs.isNull || rhs.isNull) {
+          Json.Null
+        } else {
+          Utils.compare(lhs, rhs) match {
+            case Some(0) => Json.fromBoolean(true)
+            case Some(_) => Json.fromBoolean(false)
+            case None    => Json.Null
+          }
         }
       case _ => Json.fromBoolean(false)
     }
