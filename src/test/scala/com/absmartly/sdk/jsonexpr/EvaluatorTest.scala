@@ -139,16 +139,16 @@ class EvaluatorTest extends AnyFunSuite {
     assert(result.asBoolean.contains(true))
   }
 
-  test("eq returns true for null == null") {
+  test("eq returns null for null == null") {
     val expr = parse("""{"eq": [{"value": null}, {"value": null}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(true))
+    assert(result.isNull)
   }
 
-  test("eq returns false for null == 0") {
+  test("eq returns null for null == 0") {
     val expr = parse("""{"eq": [{"value": null}, {"value": 0}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(false))
+    assert(result.isNull)
   }
 
   // GT operator tests
