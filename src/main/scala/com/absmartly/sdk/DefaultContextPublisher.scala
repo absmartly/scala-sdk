@@ -25,7 +25,7 @@ class DefaultContextPublisher(config: SDKConfig)(implicit ec: ExecutionContext) 
         import PublishEvent.attributeEncoder
 
         val baseFields = Map(
-          "units" -> units.asJson,
+          "units" -> units.map { case (unitType, uid) => PublishUnit(unitType, uid) }.toList.asJson,
           "hashed" -> hashed.asJson,
           "exposures" -> exposures.asJson,
           "goals" -> goals.asJson,
@@ -41,6 +41,8 @@ class DefaultContextPublisher(config: SDKConfig)(implicit ec: ExecutionContext) 
           .header("X-API-Key", config.apiKey)
           .header("X-Application", config.application)
           .header("X-Environment", config.environment)
+          .header("X-Application-Version", "0")
+          .header("X-Agent", "absmartly-scala-sdk")
           .header("Content-Type", "application/json")
           .body(fields.asJson.noSpaces)
           .readTimeout(scala.concurrent.duration.Duration(config.timeout, "ms"))

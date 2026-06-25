@@ -110,18 +110,24 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(put.get.path == "/context")
     assert(put.get.rawQuery.isEmpty, "PUT should carry no query params")
 
-    // --- headers (Scala publish sends X-API-Key, X-Application, X-Environment, Content-Type) ---
+    // --- headers (full canonical set) ---
     val h = put.get.headers
     assert(h.get("x-api-key").contains("test-api-key"))
     assert(h.get("x-application").contains("website"))
     assert(h.get("x-environment").contains("dev"))
+    assert(h.get("x-application-version").contains("0"))
+    assert(h.get("x-agent").exists(_.nonEmpty), "X-Agent must be present and non-empty")
     assert(h.get("content-type").exists(_.contains("application/json")))
 
     // --- body ---
     val json = parse(put.get.body).getOrElse(Json.Null)
     val cursor = json.hcursor
     assert(cursor.get[Boolean]("hashed").contains(true))
-    assert(json.hcursor.downField("units").succeeded, "units must be present")
+    // units must be an array of {type, uid} objects (not a JSON object map).
+    val units = json.hcursor.downField("units").as[List[Json]].getOrElse(Nil)
+    assert(units.nonEmpty, "units must be a non-empty array")
+    assert(units.head.hcursor.get[String]("type").isRight, "each unit must have a `type`")
+    assert(units.head.hcursor.get[String]("uid").isRight, "each unit must have a `uid`")
     assert(cursor.get[Long]("publishedAt").isRight, "publishedAt must be a number")
     val goals = json.hcursor.downField("goals").as[List[Json]].getOrElse(Nil)
     assert(goals.nonEmpty, "goals must be present and non-empty")
