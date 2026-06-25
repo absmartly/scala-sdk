@@ -1,7 +1,8 @@
 package com.absmartly.sdk.jsonexpr
 
 import io.circe.Json
-import com.absmartly.sdk.Utils
+import com.absmartly.sdk.{Utils, Logger}
+import scala.util.{Try, Success, Failure}
 
 /**
  * JSON Expression Evaluator for audience targeting
@@ -14,6 +15,13 @@ import com.absmartly.sdk.Utils
  * - in, match
  */
 object Evaluator {
+
+  private val REGEX_TIMEOUT_MS = 100L
+  private val MAX_PATTERN_LENGTH = 500
+  private val MAX_INPUT_LENGTH = 25000
+  private val MAX_ARRAY_SIZE_WARNING = 1000
+
+  private val logger = Logger.get
 
   /**
    * Evaluate a JSON expression against a context
@@ -54,9 +62,12 @@ object Evaluator {
       case "gte" => evaluateGte(args, vars)
       case "lt" => evaluateLt(args, vars)
       case "lte" => evaluateLte(args, vars)
-      case "in" => evaluateIn(args, vars)
+      case "in" => evaluateContains(args, vars)
+      case "contains" => evaluateContains(args, vars)
       case "match" => evaluateMatch(args, vars)
-      case _ => Json.Null // Unknown operator
+      case _ =>
+        logger.error(s"Unknown operator '$op' with args: ${args.noSpaces}")
+        Json.Null
     }
   }
 
@@ -117,8 +128,13 @@ object Evaluator {
 
         for (part <- parts) {
           current = current.asObject match {
-            case Some(obj) => obj(part).getOrElse(Json.Null)
-            case None => Json.Null
+            case Some(obj) => obj(part).getOrElse {
+              logger.debug(s"Variable path '$path' - key '$part' not found")
+              Json.Null
+            }
+            case None =>
+              logger.debug(s"Variable path '$path' - expected object at '$part'")
+              Json.Null
           }
         }
         current
@@ -133,10 +149,16 @@ object Evaluator {
         val lhs = evaluate(arr(0), vars)
         val rhs = evaluate(arr(1), vars)
 
-        Utils.compare(lhs, rhs) match {
-          case Some(0) => Json.fromBoolean(true)
-          case Some(_) => Json.fromBoolean(false)
-          case None => Json.fromBoolean(lhs.isNull && rhs.isNull)
+        // A null operand short-circuits to null (canonical: eq does not treat
+        // null == null as a match), matching the other SDKs and the collector.
+        if (lhs.isNull || rhs.isNull) {
+          Json.Null
+        } else {
+          Utils.compare(lhs, rhs) match {
+            case Some(0) => Json.fromBoolean(true)
+            case Some(_) => Json.fromBoolean(false)
+            case None    => Json.Null
+          }
         }
       case _ => Json.fromBoolean(false)
     }
@@ -202,18 +224,24 @@ object Evaluator {
     }
   }
 
-  // IN operator: contains check
-  private def evaluateIn(args: Json, vars: Map[String, Json]): Json = {
+  // CONTAINS operator (also registered under the legacy alias "in").
+  // Operand order is haystack-first: [haystack, needle]. This matches the
+  // collector and the other ABsmartly SDKs.
+  private def evaluateContains(args: Json, vars: Map[String, Json]): Json = {
     args.asArray match {
       case Some(arr) if arr.length >= 2 =>
-        val needle = evaluate(arr(0), vars)
-        val haystack = evaluate(arr(1), vars)
+        val haystack = evaluate(arr(0), vars)
+        val needle = evaluate(arr(1), vars)
 
-        // Check if needle is in haystack
+        // Check if haystack contains needle
         val result: Boolean = (needle, haystack) match {
           case (n, h) if n.isNull || h.isNull => false
           case (n, h) if h.isArray =>
-            h.asArray.exists(_.contains(n))
+            val haystackArray = h.asArray.getOrElse(Vector.empty)
+            if (haystackArray.size > MAX_ARRAY_SIZE_WARNING) {
+              logger.warn(s"Large array in 'contains' operator: ${haystackArray.size} elements (performance warning)")
+            }
+            haystackArray.contains(n)
           case (n, h) if h.isString && n.isString =>
             (for {
               haystackStr <- h.asString
@@ -227,20 +255,48 @@ object Evaluator {
     }
   }
 
-  // MATCH operator: regex matching
+  // MATCH operator: regex matching with ReDoS protection
   private def evaluateMatch(args: Json, vars: Map[String, Json]): Json = {
     args.asArray match {
       case Some(arr) if arr.length >= 2 =>
         val text = evaluate(arr(0), vars)
         val pattern = evaluate(arr(1), vars)
 
-        val result = for {
+        val result = (for {
           textStr <- text.asString
           patternStr <- pattern.asString
-          regex <- scala.util.Try(patternStr.r).toOption
-        } yield regex.findFirstIn(textStr).isDefined
+        } yield {
+          if (patternStr.length > MAX_PATTERN_LENGTH) {
+            logger.warn(s"Regex pattern too long: ${patternStr.length} chars (max $MAX_PATTERN_LENGTH)")
+            false
+          } else if (textStr.length > MAX_INPUT_LENGTH) {
+            logger.warn(s"Regex input too long: ${textStr.length} chars (max $MAX_INPUT_LENGTH)")
+            false
+          } else {
+            Try(patternStr.r) match {
+              case Success(regex) =>
+                @volatile var matched = false
+                val thread = new Thread(() => {
+                  matched = regex.findFirstIn(textStr).isDefined
+                })
+                thread.setDaemon(true)
+                thread.start()
+                thread.join(REGEX_TIMEOUT_MS)
+                if (thread.isAlive) {
+                  thread.interrupt()
+                  logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='$patternStr'")
+                  false
+                } else {
+                  matched
+                }
+              case Failure(e) =>
+                logger.warn(s"Invalid regex pattern: '$patternStr' - ${e.getMessage}")
+                false
+            }
+          }
+        }).getOrElse(false)
 
-        Json.fromBoolean(result.getOrElse(false))
+        Json.fromBoolean(result)
       case _ => Json.fromBoolean(false)
     }
   }

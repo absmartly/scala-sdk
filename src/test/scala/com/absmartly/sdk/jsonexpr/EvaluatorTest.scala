@@ -139,16 +139,16 @@ class EvaluatorTest extends AnyFunSuite {
     assert(result.asBoolean.contains(true))
   }
 
-  test("eq returns true for null == null") {
+  test("eq returns null for null == null") {
     val expr = parse("""{"eq": [{"value": null}, {"value": null}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(true))
+    assert(result.isNull)
   }
 
-  test("eq returns false for null == 0") {
+  test("eq returns null for null == 0") {
     val expr = parse("""{"eq": [{"value": null}, {"value": 0}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(false))
+    assert(result.isNull)
   }
 
   // GT operator tests
@@ -229,13 +229,13 @@ class EvaluatorTest extends AnyFunSuite {
   }
 
   test("in returns true when array contains value") {
-    val expr = parse("""{"in": [{"value": 2}, {"value": [1, 2, 3]}]}""").toOption.get
+    val expr = parse("""{"in": [{"value": [1, 2, 3]}, {"value": 2}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
     assert(result.asBoolean.contains(true))
   }
 
   test("in returns false when array doesn't contain value") {
-    val expr = parse("""{"in": [{"value": 5}, {"value": [1, 2, 3]}]}""").toOption.get
+    val expr = parse("""{"in": [{"value": [1, 2, 3]}, {"value": 5}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
     assert(result.asBoolean.contains(false))
   }
