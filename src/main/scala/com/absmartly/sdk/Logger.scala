@@ -50,6 +50,7 @@ object Logger {
   @volatile private var instance: Logger = new NoOpLogger()
 
   def setLogger(logger: Logger): Unit = {
+    require(logger != null, "logger must not be null")
     instance = logger
   }
 

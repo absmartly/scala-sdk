@@ -62,7 +62,7 @@ class DefaultContextPublisher(config: SDKConfig)(implicit ec: ExecutionContext) 
           case code =>
             val body = response.body.fold(identity, identity)
             logger.error(s"Publish failed HTTP ${code.code}: $body")
-            throw ServerException(code.code, s"Publish failed: $body")
+            throw ServerException(code.code, body)
         }
       } catch {
         case e: SDKException => throw e

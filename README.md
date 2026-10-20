@@ -125,11 +125,13 @@ println(s"Context ready: ${context.isReady()}")
 When doing full-stack experimentation with ABsmartly, we recommend creating a context only once on the server-side. Creating a context involves a round-trip to the ABsmartly event collector. We can avoid repeating the round-trip on the client-side by sending the server-side data embedded in the first document.
 
 ```scala
+import scala.concurrent.Await
+import scala.concurrent.duration._
 import com.absmartly.sdk.{SDK, SDKConfig, ContextData}
 
 val units = Map("session_id" -> "5ebf06d8cb5d8137290c4abb64155584fbdb64d8")
 
-val contextData: ContextData = sdk.fetchContextData()
+val contextData: ContextData = Await.result(sdk.fetchContextDataAsync(), 5.seconds)
 
 val context = sdk.createContextWith(units, contextData)
 assert(context.isReady())

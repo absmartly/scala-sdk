@@ -211,19 +211,23 @@ class FixesTest extends AnyFunSuite {
   // ======================
 
   test("fix3: Logger instance is visible across threads") {
+    val previousLogger = Logger.get
     val customLogger = new NoOpLogger()
     Logger.setLogger(customLogger)
 
-    @volatile var seenLogger: Logger = null
+    try {
+      @volatile var seenLogger: Logger = null
 
-    val thread = new Thread(() => {
-      seenLogger = Logger.get
-    })
-    thread.start()
-    thread.join(1000)
+      val thread = new Thread(() => {
+        seenLogger = Logger.get
+      })
+      thread.start()
+      thread.join(1000)
 
-    assert(seenLogger eq customLogger)
-    Logger.setLogger(new NoOpLogger())
+      assert(seenLogger eq customLogger)
+    } finally {
+      Logger.setLogger(previousLogger)
+    }
   }
 
   // ======================
@@ -255,7 +259,7 @@ class FixesTest extends AnyFunSuite {
       Future { context.pending() }
     }
     val results = Await.result(Future.sequence(futures), 5.seconds)
-    assert(results.forall(_ >= 0))
+    assert(results.forall(_ == 1))
   }
 
   // ======================
@@ -410,12 +414,14 @@ class FixesTest extends AnyFunSuite {
         if (i % 2 == 0) {
           context.setAttribute(s"attr_$i", Json.fromInt(i))
         } else {
+          context.getAttribute(s"attr_${i - 1}")
           context.getAttributes()
         }
       }
     }
 
     Await.result(Future.sequence(futures), 5.seconds)
+    assert(context.getAttribute("attr_50").flatMap(_.asNumber).flatMap(_.toInt).contains(50))
   }
 
   // ======================
