@@ -46,8 +46,29 @@ class NoOpLogger extends Logger {
   override def error(message: => String, throwable: Throwable): Unit = ()
 }
 
+private[sdk] object SafeLogger extends Logger {
+  private def guarded(f: Logger => Unit): Unit =
+    try f(Logger.get)
+    catch { case NonFatal(_) => () }
+
+  override def debug(message: => String): Unit = guarded(_.debug(message))
+  override def info(message: => String): Unit = guarded(_.info(message))
+  override def warn(message: => String): Unit = guarded(_.warn(message))
+  override def error(message: => String): Unit = guarded(_.error(message))
+  override def error(message: => String, throwable: Throwable): Unit = guarded(_.error(message, throwable))
+}
+
 object Logger {
   @volatile private var instance: Logger = new NoOpLogger()
+
+  private[sdk] def safe: Logger = SafeLogger
+
+  /** Bounds untrusted text and replaces control characters before it is logged or surfaced. */
+  private[sdk] def sanitize(text: String, maxLength: Int = 200): String = {
+    val cleaned = text.map(c => if (Character.isISOControl(c)) ' ' else c)
+    if (cleaned.length > maxLength) cleaned.take(maxLength) + s"...[truncated ${cleaned.length - maxLength} chars]"
+    else cleaned
+  }
 
   def setLogger(logger: Logger): Unit = {
     require(logger != null, "logger must not be null")

@@ -33,7 +33,7 @@ object SDK {
 class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
 
   private val backend = HttpURLConnectionBackend()
-  private val logger = Logger.get
+  private val logger = Logger.safe
 
   /**
    * Create context by fetching data from API (ASYNC)
@@ -86,7 +86,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
             logger.warn("Rate limit exceeded")
             throw ServerException(429, "Rate limit exceeded")
           case code =>
-            val body = response.body.fold(identity, identity)
+            val body = Logger.sanitize(response.body.fold(identity, identity), 500)
             logger.error(s"HTTP ${code.code}: $body")
             throw ServerException(code.code, body)
         }
@@ -173,9 +173,9 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
             logger.debug(s"Publish successful with status ${code.code}")
             ()
           case code =>
-            val body = response.body.fold(identity, identity)
+            val body = Logger.sanitize(response.body.fold(identity, identity), 500)
             logger.error(s"Publish failed HTTP ${code.code}: $body")
-            throw ServerException(code.code, s"Publish failed: $body")
+            throw ServerException(code.code, body)
         }
       } catch {
         case e: SDKException => throw e
@@ -232,7 +232,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
             throw NetworkException(s"Empty response: $error")
         }
       case code =>
-        val body = response.body.fold(identity, identity)
+        val body = Logger.sanitize(response.body.fold(identity, identity), 500)
         throw ServerException(code.code, body)
     }
   }
@@ -275,7 +275,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
           logger.warn("Rate limit exceeded")
           throw ServerException(429, "Rate limit exceeded")
         case code =>
-          val body = response.body.fold(identity, identity)
+          val body = Logger.sanitize(response.body.fold(identity, identity), 500)
           logger.error(s"HTTP ${code.code}: $body")
           throw ServerException(code.code, body)
       }

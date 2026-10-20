@@ -21,7 +21,7 @@ object Evaluator {
   private val MAX_INPUT_LENGTH = 25000
   private val MAX_ARRAY_SIZE_WARNING = 1000
 
-  private val logger = Logger.get
+  private val logger = Logger.safe
 
   /**
    * Evaluate a JSON expression against a context

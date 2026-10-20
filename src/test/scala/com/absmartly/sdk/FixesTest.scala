@@ -429,6 +429,45 @@ class FixesTest extends AnyFunSuite {
     assert(Thread.getAllStackTraces.keySet.size <= before + 1)
   }
 
+  test("successful finalize emits the documented close event") {
+    val events = scala.collection.mutable.ListBuffer[String]()
+    val sink = new EventLogger {
+      override def logEvent(eventType: String, data: Json): Unit = events += eventType
+    }
+    val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", eventLogger = sink)
+    val context = new SDK(cfg).createContextWith(testUnits, testData)
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(events.contains("close"))
+    assert(!events.contains("finalize"))
+  }
+
+  test("throwing configured Logger does not change operation outcomes") {
+    val previous = Logger.get
+    val throwing = new Logger {
+      override def debug(message: => String): Unit = throw new RuntimeException("log down")
+      override def info(message: => String): Unit = throw new RuntimeException("log down")
+      override def warn(message: => String): Unit = throw new RuntimeException("log down")
+      override def error(message: => String): Unit = throw new RuntimeException("log down")
+      override def error(message: => String, throwable: Throwable): Unit = throw new RuntimeException("log down")
+    }
+    try {
+      Logger.setLogger(throwing)
+      val context = createContext()
+      context.setUnit("extra_unit", "abc")
+      assert(context.getUnit("extra_unit").contains("abc"))
+      Await.result(context.finalizeContext(), 5.seconds)
+      assert(context.isFinalized())
+    } finally {
+      Logger.setLogger(previous)
+    }
+  }
+
+  test("Logger.sanitize bounds length and strips control characters") {
+    val out = Logger.sanitize("a\nb\u0007" + ("x" * 1000), 50)
+    assert(!out.exists(Character.isISOControl))
+    assert(out.length < 120)
+  }
+
   // ======================
   // Fix #7: API key masking
   // ======================

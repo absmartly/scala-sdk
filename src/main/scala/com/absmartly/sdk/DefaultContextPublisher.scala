@@ -9,7 +9,7 @@ import io.circe.syntax._
 class DefaultContextPublisher(config: SDKConfig)(implicit ec: ExecutionContext) extends ContextPublisher {
 
   private val backend = HttpURLConnectionBackend()
-  private val logger = Logger.get
+  private val logger = Logger.safe
 
   def publish(
     units: Map[String, String],
@@ -60,7 +60,7 @@ class DefaultContextPublisher(config: SDKConfig)(implicit ec: ExecutionContext) 
             logger.debug(s"Publish successful with status ${code.code}")
             ()
           case code =>
-            val body = response.body.fold(identity, identity)
+            val body = Logger.sanitize(response.body.fold(identity, identity), 500)
             logger.error(s"Publish failed HTTP ${code.code}: $body")
             throw ServerException(code.code, body)
         }

@@ -21,7 +21,7 @@ class Context(
   def this(sdk: SDK, data: ContextData, units: Map[String, String], options: ContextOptions, eventLogger: EventLogger)(implicit ec: ExecutionContext) =
     this(sdk, Some(data), units, options, eventLogger)
 
-  private val logger = Logger.get
+  private val logger = Logger.safe
   private val lock = new AnyRef
 
   @volatile private var _ready: Boolean = initialData.isDefined
@@ -417,7 +417,7 @@ class Context(
         _finalized = true
         _finalizing = false
       }
-      safeLog("finalize", Json.Null)
+      safeLog("close", Json.Null)
       logger.info("Context finalized successfully")
     }.recoverWith { case ex =>
       lock.synchronized {

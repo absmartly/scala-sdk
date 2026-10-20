@@ -9,7 +9,7 @@ import scala.util.control.NonFatal
  */
 class AudienceMatcher(vars: Map[String, Json]) {
 
-  private val logger = Logger.get
+  private val logger = Logger.safe
 
   /**
    * Evaluate audience filter
@@ -45,20 +45,20 @@ class AudienceMatcher(vars: Map[String, Json]) {
                       }
                       Some(Utils.booleanConvert(result).getOrElse(false))
                     case None =>
-                      logger.warn(s"Audience missing 'filter' key, defaulting to match all: $audienceStr")
+                      logger.warn(s"Audience missing 'filter' key, defaulting to match all: ${Logger.sanitize(audienceStr)}")
                       Some(true)
                   }
                 case None =>
-                  logger.warn(s"Audience not an object, defaulting to match all: $audienceStr")
+                  logger.warn(s"Audience not an object, defaulting to match all: ${Logger.sanitize(audienceStr)}")
                   Some(true)
               }
             case Left(parseError) =>
-              logger.error(s"Audience parse error, defaulting to match all: ${parseError.getMessage}\nAudience: $audienceStr")
+              logger.error(s"Audience parse error, defaulting to match all: ${Logger.sanitize(parseError.getMessage)} Audience: ${Logger.sanitize(audienceStr)}")
               Some(true)
           }
         } catch {
           case NonFatal(e) =>
-            logger.error(s"Audience evaluation error: ${e.getMessage}\nAudience: $audienceStr", e)
+            logger.error(s"Audience evaluation error: ${Logger.sanitize(String.valueOf(e.getMessage))} Audience: ${Logger.sanitize(audienceStr)}", e)
             None
         }
     }
