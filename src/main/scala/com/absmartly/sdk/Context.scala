@@ -311,12 +311,14 @@ class Context(
   }
 
   private def _flush(): Future[Unit] = {
+    val done = scala.concurrent.Promise[Unit]()
     val (hashedUnits, exposures, goals, attributes) = lock.synchronized {
       val e = _exposures.toList
       val g = _goals.toList
       if (e.nonEmpty || g.nonEmpty) {
         _exposures.clear()
         _goals.clear()
+        _inflight += done.future
       }
       (_getHashedUnits(), e, g, _attributes.toList)
     }
@@ -327,46 +329,51 @@ class Context(
     } else {
       logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
 
-      val unitsList = hashedUnits.map { case (unitType, hashedUid) =>
-        PublishUnit(unitType, hashedUid)
-      }.toList
-
-      val publishEvent = PublishEvent(
-        hashed = true,
-        publishedAt = System.currentTimeMillis(),
-        units = unitsList,
-        exposures = exposures,
-        goals = goals,
-        attributes = if (attributes.nonEmpty) Some(attributes) else None
-      )
-
-      eventLogger.logEvent("publish", publishEvent.asJson)
-
-      val unitsMap = hashedUnits
-      val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
-
       val publishFuture =
         try {
+          val unitsList = hashedUnits.map { case (unitType, hashedUid) =>
+            PublishUnit(unitType, hashedUid)
+          }.toList
+
+          val publishEvent = PublishEvent(
+            hashed = true,
+            publishedAt = System.currentTimeMillis(),
+            units = unitsList,
+            exposures = exposures,
+            goals = goals,
+            attributes = if (attributes.nonEmpty) Some(attributes) else None
+          )
+
+          try {
+            eventLogger.logEvent("publish", publishEvent.asJson)
+          } catch {
+            case scala.util.control.NonFatal(e) =>
+              logger.warn(s"Event logger failed for publish event: ${e.getMessage}")
+          }
+
+          val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
           sdk.getConfig.publisher match {
-            case Some(publisher) => publisher.publish(unitsMap, true, exposures, goals, attrOpt)
-            case None => sdk.publish(unitsMap, true, exposures, goals, attrOpt)
+            case Some(publisher) => publisher.publish(hashedUnits, true, exposures, goals, attrOpt)
+            case None => sdk.publish(hashedUnits, true, exposures, goals, attrOpt)
           }
         } catch {
           case scala.util.control.NonFatal(e) => Future.failed(e)
         }
-      val tracked = publishFuture.map { _ =>
-        ()
-      }.recoverWith { case ex =>
-        lock.synchronized {
-          _exposures.prependAll(exposures)
-          _goals.prependAll(goals)
+
+      publishFuture.onComplete { result =>
+        result match {
+          case scala.util.Failure(ex) =>
+            lock.synchronized {
+              _exposures.prependAll(exposures)
+              _goals.prependAll(goals)
+            }
+            logger.error(s"Publish failed: ${ex.getMessage}", ex)
+          case _ =>
         }
-        logger.error(s"Publish failed: ${ex.getMessage}", ex)
-        Future.failed(ex)
+        lock.synchronized { _inflight -= done.future }
+        done.complete(result.map(_ => ()))
       }
-      lock.synchronized { _inflight += tracked }
-      tracked.onComplete(_ => lock.synchronized { _inflight -= tracked })
-      tracked
+      done.future
     }
   }
 

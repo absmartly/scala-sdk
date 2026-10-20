@@ -375,6 +375,36 @@ class FixesTest extends AnyFunSuite {
     assert(!context.isFinalized())
   }
 
+  test("throwing publish event logger does not lose the batch") {
+    val badLogger = new EventLogger {
+      override def logEvent(eventType: String, data: Json): Unit =
+        if (eventType == "publish") throw new RuntimeException("sink down")
+    }
+    var published = 0
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = { published += 1; Future.successful(()) }
+    }
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      eventLogger = badLogger,
+      publisher = Some(publisher)
+    ))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.track("goal1")
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(published == 1)
+    assert(context.isFinalized())
+  }
+
   // ======================
   // Fix #7: API key masking
   // ======================
