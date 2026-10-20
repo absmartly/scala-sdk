@@ -58,7 +58,7 @@ class Context(
   // Initialize
   initialData.foreach { data =>
     _init(data)
-    eventLogger.logEvent("ready", _data.asJson)
+    safeLog("ready", _data.asJson)
   }
 
   // ======================
@@ -73,7 +73,7 @@ class Context(
   def setData(data: ContextData): Unit = lock.synchronized {
     _init(data)
     _ready = true
-    eventLogger.logEvent("ready", _data.asJson)
+    safeLog("ready", _data.asJson)
   }
 
   def setDataFailed(error: Option[Throwable] = None): Unit = lock.synchronized {
@@ -290,7 +290,7 @@ class Context(
 
     _goals += goal
 
-    eventLogger.logEvent("goal", Json.obj(
+    safeLog("goal", Json.obj(
       "name" -> Json.fromString(goal.name),
       "achievedAt" -> Json.fromLong(goal.achievedAt),
       "properties" -> goal.properties.map(p =>
@@ -344,12 +344,7 @@ class Context(
             attributes = if (attributes.nonEmpty) Some(attributes) else None
           )
 
-          try {
-            eventLogger.logEvent("publish", publishEvent.asJson)
-          } catch {
-            case scala.util.control.NonFatal(e) =>
-              logger.warn(s"Event logger failed for publish event: ${e.getMessage}")
-          }
+          safeLog("publish", publishEvent.asJson)
 
           val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
           sdk.getConfig.publisher match {
@@ -374,6 +369,14 @@ class Context(
         done.complete(result.map(_ => ()))
       }
       done.future
+    }
+  }
+
+  private def safeLog(eventType: String, data: => Json): Unit = {
+    try eventLogger.logEvent(eventType, data)
+    catch {
+      case scala.util.control.NonFatal(e) =>
+        logger.warn(s"Event logger failed for '$eventType' event: ${e.getMessage}")
     }
   }
 
@@ -414,7 +417,7 @@ class Context(
         _finalized = true
         _finalizing = false
       }
-      eventLogger.logEvent("finalize", Json.Null)
+      safeLog("finalize", Json.Null)
       logger.info("Context finalized successfully")
     }.recoverWith { case ex =>
       lock.synchronized {
@@ -436,7 +439,7 @@ class Context(
 
     val oldIndex = _index
     _init(newData)
-    eventLogger.logEvent("refresh", newData.asJson)
+    safeLog("refresh", newData.asJson)
 
     val toRemove = mutable.ListBuffer[String]()
     val toReset = mutable.ListBuffer[String]()
@@ -763,7 +766,7 @@ class Context(
 
       _exposures += exposure
 
-      eventLogger.logEvent("exposure", Json.obj(
+      safeLog("exposure", Json.obj(
         "id" -> Json.fromInt(exposure.id),
         "name" -> Json.fromString(exposure.name),
         "unit" -> (if (exposure.unit.isEmpty) Json.Null else Json.fromString(exposure.unit)),

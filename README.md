@@ -161,6 +161,16 @@ context.setUnits(Map(
 ))
 ```
 
+## Migrating from 0.1.0 to 0.2.0
+
+Version 0.2.0 contains source-incompatible changes to align the Scala SDK with the other ABsmartly SDKs:
+
+- `Goal.properties` is now `Option[Map[String, Json]]` (was `Option[Map[String, Double]]`). Wrap numbers with `Json.fromDouble(...)`.
+- `Context.customFieldValue(experimentName, fieldName)` returns `Option[Json]` (was `Option[String]`); use `customFieldValueType` for the declared type.
+- `Context.customFieldKeys()` takes no argument and returns the keys across all experiments (was `customFieldKeys(experimentName)`).
+- `ContextPublisher` is a new extension point; custom implementations must implement `publish(units, hashed, exposures, goals, attributes)`.
+- `SDK.fetchContextData()` is deprecated; use `fetchContextDataAsync()`.
+
 ## Basic Usage
 
 ### Selecting a Treatment

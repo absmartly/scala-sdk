@@ -275,19 +275,12 @@ object Evaluator {
           } else {
             Try(patternStr.r) match {
               case Success(regex) =>
-                @volatile var matched = false
-                val thread = new Thread(() => {
-                  matched = regex.findFirstIn(textStr).isDefined
-                })
-                thread.setDaemon(true)
-                thread.start()
-                thread.join(REGEX_TIMEOUT_MS)
-                if (thread.isAlive) {
-                  thread.interrupt()
-                  logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='$patternStr'")
-                  false
-                } else {
-                  matched
+                try {
+                  regex.findFirstIn(new DeadlineCharSequence(textStr, System.nanoTime() + REGEX_TIMEOUT_MS * 1000000L)).isDefined
+                } catch {
+                  case _: RegexTimeoutException =>
+                    logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='$patternStr'")
+                    false
                 }
               case Failure(e) =>
                 logger.warn(s"Invalid regex pattern: '$patternStr' - ${e.getMessage}")
@@ -300,4 +293,19 @@ object Evaluator {
       case _ => Json.fromBoolean(false)
     }
   }
+}
+
+private[jsonexpr] class RegexTimeoutException extends RuntimeException("regex deadline exceeded", null, false, false)
+
+/** CharSequence that aborts regex matching on the calling thread once the deadline passes. */
+private[jsonexpr] class DeadlineCharSequence(inner: CharSequence, deadlineNanos: Long) extends CharSequence {
+  private var counter = 0
+  override def length(): Int = inner.length()
+  override def charAt(index: Int): Char = {
+    counter += 1
+    if ((counter & 0xFF) == 0 && System.nanoTime() - deadlineNanos > 0) throw new RegexTimeoutException
+    inner.charAt(index)
+  }
+  override def subSequence(start: Int, end: Int): CharSequence = new DeadlineCharSequence(inner.subSequence(start, end), deadlineNanos)
+  override def toString: String = inner.toString
 }

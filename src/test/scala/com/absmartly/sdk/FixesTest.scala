@@ -405,6 +405,30 @@ class FixesTest extends AnyFunSuite {
     assert(context.isFinalized())
   }
 
+  test("event logger failures do not break finalization") {
+    val badLogger = new EventLogger {
+      override def logEvent(eventType: String, data: Json): Unit = throw new RuntimeException("sink down")
+    }
+    val cfg = SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      eventLogger = badLogger
+    )
+    val context = new SDK(cfg).createContextWith(testUnits, testData)
+    assert(context.isReady())
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(context.isFinalized())
+  }
+
+  test("catastrophic regex is aborted on the calling thread without leaking workers") {
+    val before = Thread.getAllStackTraces.keySet.size
+    val expr = parse("""{"match":[{"value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"},{"value":"(a+)+$"}]}""").toOption.get
+    (1 to 5).foreach(_ => assert(com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty) == Json.False))
+    assert(Thread.getAllStackTraces.keySet.size <= before + 1)
+  }
+
   // ======================
   // Fix #7: API key masking
   // ======================
