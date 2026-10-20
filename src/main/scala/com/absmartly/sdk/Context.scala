@@ -391,17 +391,17 @@ class Context(
       }
       eventLogger.logEvent("finalize", Json.Null)
       logger.info("Context finalized successfully")
-    }.recover { case ex =>
+    }.recoverWith { case ex =>
       lock.synchronized {
-        _finalized = true
         _finalizing = false
       }
       logger.error(s"Finalization failed: ${ex.getMessage}", ex)
+      Future.failed(ex)
     }
   }
 
   def refresh(): Unit = {
-    val newData = sdk.fetchContextData()
+    val newData = scala.concurrent.Await.result(sdk.fetchContextDataAsync(), scala.concurrent.duration.Duration.Inf)
     refresh(newData)
   }
 

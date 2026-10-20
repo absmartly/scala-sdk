@@ -17,23 +17,23 @@ class ConsoleLogger extends Logger {
   }
 
   override def debug(message: => String): Unit = {
-    println(s"[$timestamp] DEBUG - $message")
+    println(s"[${timestamp()}] DEBUG - $message")
   }
 
   override def info(message: => String): Unit = {
-    println(s"[$timestamp] INFO - $message")
+    println(s"[${timestamp()}] INFO - $message")
   }
 
   override def warn(message: => String): Unit = {
-    System.err.println(s"[$timestamp] WARN - $message")
+    System.err.println(s"[${timestamp()}] WARN - $message")
   }
 
   override def error(message: => String): Unit = {
-    System.err.println(s"[$timestamp] ERROR - $message")
+    System.err.println(s"[${timestamp()}] ERROR - $message")
   }
 
   override def error(message: => String, throwable: Throwable): Unit = {
-    System.err.println(s"[$timestamp] ERROR - $message")
+    System.err.println(s"[${timestamp()}] ERROR - $message")
     throwable.printStackTrace(System.err)
   }
 }

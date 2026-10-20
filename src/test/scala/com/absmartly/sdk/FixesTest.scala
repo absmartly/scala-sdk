@@ -288,6 +288,32 @@ class FixesTest extends AnyFunSuite {
     assert(results.forall(_ == "1"))
   }
 
+  test("finalizeContext propagates publish failure and keeps events retryable") {
+    var fail = true
+    val failingPublisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] =
+        if (fail) Future.failed(new RuntimeException("boom")) else Future.successful(())
+    }
+    val pubSdk = new SDK(config.copy(publisher = Some(failingPublisher)))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+
+    val ex = intercept[RuntimeException] { Await.result(context.finalizeContext(), 5.seconds) }
+    assert(ex.getMessage == "boom")
+    assert(!context.isFinalized())
+    assert(context.pending() == 1)
+
+    fail = false
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(context.isFinalized())
+  }
+
   // ======================
   // Fix #7: API key masking
   // ======================

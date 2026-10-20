@@ -126,8 +126,8 @@ class ContextTest extends AnyFunSuite {
     options: ContextOptions = ContextOptions()
   ): Context = {
     val mockSdk = new SDK(config) {
-      @deprecated("", since = "0.1.0")
-      override def fetchContextData(): ContextData = refreshData
+      override def fetchContextDataAsync(): scala.concurrent.Future[ContextData] =
+        scala.concurrent.Future.successful(refreshData)
     }
     mockSdk.createContextWith(units, data, options)
   }
