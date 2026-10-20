@@ -203,7 +203,9 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
   }
 
   @deprecated("fetchContextData() blocks the calling thread. Use fetchContextDataAsync() instead, which returns a Future[ContextData].", since = "0.1.0")
-  def fetchContextData(): ContextData = {
+  def fetchContextData(): ContextData = fetchContextDataBlocking()
+
+  private[sdk] def fetchContextDataBlocking(): ContextData = {
     val request = basicRequest
       .get(uri"${config.endpoint}/context?application=${config.application}&environment=${config.environment}")
       .header("X-API-Key", config.apiKey)

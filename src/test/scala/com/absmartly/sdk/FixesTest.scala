@@ -300,7 +300,13 @@ class FixesTest extends AnyFunSuite {
       ): Future[Unit] =
         if (fail) Future.failed(new RuntimeException("boom")) else Future.successful(())
     }
-    val pubSdk = new SDK(config.copy(publisher = Some(failingPublisher)))
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      publisher = Some(failingPublisher)
+    ))
     val context = pubSdk.createContextWith(testUnits, testData)
     context.treatment("exp_test_ab")
 
@@ -312,6 +318,61 @@ class FixesTest extends AnyFunSuite {
     fail = false
     Await.result(context.finalizeContext(), 5.seconds)
     assert(context.isFinalized())
+  }
+
+  test("finalizeContext waits for an outstanding publish and surfaces its failure") {
+    val promise = scala.concurrent.Promise[Unit]()
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = promise.future
+    }
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      publisher = Some(publisher)
+    ))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+    val pub = context.publish()
+    val closing = context.finalizeContext()
+    assert(!closing.isCompleted)
+    promise.failure(new RuntimeException("late failure"))
+    intercept[RuntimeException] { Await.result(pub, 5.seconds) }
+    intercept[RuntimeException] { Await.result(closing, 5.seconds) }
+    assert(!context.isFinalized())
+    assert(context.pending() == 1)
+  }
+
+  test("synchronous publisher failure keeps the batch and clears finalizing state") {
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = throw new IllegalStateException("sync boom")
+    }
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      publisher = Some(publisher)
+    ))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+    intercept[IllegalStateException] { Await.result(context.finalizeContext(), 5.seconds) }
+    assert(context.pending() == 1)
+    assert(!context.isFinalizing())
+    assert(!context.isFinalized())
   }
 
   // ======================

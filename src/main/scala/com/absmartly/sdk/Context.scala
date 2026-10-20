@@ -27,6 +27,7 @@ class Context(
   @volatile private var _ready: Boolean = initialData.isDefined
   @volatile private var _failed: Boolean = false
   @volatile private var _failedError: Option[Throwable] = None
+  private val _inflight = mutable.Set[Future[Unit]]()
   @volatile private var _finalized: Boolean = false
   @volatile private var _finalizing: Boolean = false
 
@@ -344,11 +345,16 @@ class Context(
       val unitsMap = hashedUnits
       val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
 
-      val publishFuture = sdk.getConfig.publisher match {
-        case Some(publisher) => publisher.publish(unitsMap, true, exposures, goals, attrOpt)
-        case None => sdk.publish(unitsMap, true, exposures, goals, attrOpt)
-      }
-      publishFuture.map { _ =>
+      val publishFuture =
+        try {
+          sdk.getConfig.publisher match {
+            case Some(publisher) => publisher.publish(unitsMap, true, exposures, goals, attrOpt)
+            case None => sdk.publish(unitsMap, true, exposures, goals, attrOpt)
+          }
+        } catch {
+          case scala.util.control.NonFatal(e) => Future.failed(e)
+        }
+      val tracked = publishFuture.map { _ =>
         ()
       }.recoverWith { case ex =>
         lock.synchronized {
@@ -358,6 +364,9 @@ class Context(
         logger.error(s"Publish failed: ${ex.getMessage}", ex)
         Future.failed(ex)
       }
+      lock.synchronized { _inflight += tracked }
+      tracked.onComplete(_ => lock.synchronized { _inflight -= tracked })
+      tracked
     }
   }
 
@@ -384,7 +393,16 @@ class Context(
     val pendingCount = pending()
     logger.info(s"Finalizing context with $pendingCount pending events")
 
-    _flush().map { _ =>
+    val flushed = _flush()
+    val earlier = lock.synchronized { _inflight.toList.filterNot(_ eq flushed) }
+    val drained = Future.sequence((flushed :: earlier).map(_.transform(scala.util.Success(_)))).flatMap { results =>
+      results.collectFirst { case scala.util.Failure(e) => e } match {
+        case Some(e) => Future.failed(e)
+        case None => Future.successful(())
+      }
+    }
+
+    drained.map { _ =>
       lock.synchronized {
         _finalized = true
         _finalizing = false
@@ -401,7 +419,7 @@ class Context(
   }
 
   def refresh(): Unit = {
-    val newData = scala.concurrent.Await.result(sdk.fetchContextDataAsync(), scala.concurrent.duration.Duration.Inf)
+    val newData = sdk.fetchContextDataBlocking()
     refresh(newData)
   }
 
