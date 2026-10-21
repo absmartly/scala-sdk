@@ -468,6 +468,29 @@ class FixesTest extends AnyFunSuite {
     assert(out.length < 120)
   }
 
+  test("concurrent finalize callers share the same result") {
+    val promise = scala.concurrent.Promise[Unit]()
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = promise.future
+    }
+    val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", publisher = Some(publisher))
+    val context = new SDK(cfg).createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+    val first = context.finalizeContext()
+    val second = context.finalizeContext()
+    assert(!second.isCompleted)
+    promise.failure(new RuntimeException("late"))
+    intercept[RuntimeException] { Await.result(first, 5.seconds) }
+    intercept[RuntimeException] { Await.result(second, 5.seconds) }
+    assert(!context.isFinalized())
+  }
+
   // ======================
   // Fix #7: API key masking
   // ======================

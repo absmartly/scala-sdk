@@ -279,11 +279,11 @@ object Evaluator {
                   regex.findFirstIn(new DeadlineCharSequence(textStr, System.nanoTime() + REGEX_TIMEOUT_MS * 1000000L)).isDefined
                 } catch {
                   case _: RegexTimeoutException =>
-                    logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='$patternStr'")
+                    logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='${Logger.sanitize(patternStr)}'")
                     false
                 }
               case Failure(e) =>
-                logger.warn(s"Invalid regex pattern: '$patternStr' - ${e.getMessage}")
+                logger.warn(s"Invalid regex pattern: '${Logger.sanitize(patternStr)}' - ${Logger.sanitize(String.valueOf(e.getMessage))}")
                 false
             }
           }

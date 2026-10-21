@@ -27,6 +27,7 @@ class Context(
   @volatile private var _ready: Boolean = initialData.isDefined
   @volatile private var _failed: Boolean = false
   @volatile private var _failedError: Option[Throwable] = None
+  @volatile private var _finalizationFuture: Option[Future[Unit]] = None
   private val _inflight = mutable.Set[Future[Unit]]()
   @volatile private var _finalized: Boolean = false
   @volatile private var _finalizing: Boolean = false
@@ -383,21 +384,23 @@ class Context(
   def close(): Future[Unit] = finalizeContext()
 
   def finalizeContext(): Future[Unit] = {
-    val shouldFinalize = lock.synchronized {
+    val finalization = scala.concurrent.Promise[Unit]()
+    val existing: Option[Future[Unit]] = lock.synchronized {
       if (_finalized) {
         logger.debug("Context already finalized")
-        false
-      } else if (_finalizing) {
+        Some(Future.successful(()))
+      } else if (_finalizing && _finalizationFuture.isDefined) {
         logger.warn("Context already finalizing")
-        false
+        _finalizationFuture
       } else {
         _finalizing = true
-        true
+        _finalizationFuture = Some(finalization.future)
+        None
       }
     }
 
-    if (!shouldFinalize) {
-      return Future.successful(())
+    if (existing.isDefined) {
+      return existing.get
     }
 
     val pendingCount = pending()
@@ -412,20 +415,24 @@ class Context(
       }
     }
 
-    drained.map { _ =>
+    val result = drained.map { _ =>
       lock.synchronized {
         _finalized = true
         _finalizing = false
+        _finalizationFuture = None
       }
       safeLog("close", Json.Null)
       logger.info("Context finalized successfully")
     }.recoverWith { case ex =>
       lock.synchronized {
         _finalizing = false
+        _finalizationFuture = None
       }
       logger.error(s"Finalization failed: ${ex.getMessage}", ex)
       Future.failed(ex)
     }
+    finalization.completeWith(result)
+    finalization.future
   }
 
   def refresh(): Unit = {

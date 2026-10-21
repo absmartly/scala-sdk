@@ -68,7 +68,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
                     logger.debug(s"Context created with ${data.experiments.length} experiments")
                     new Context(this, data, units, options, config.eventLogger)
                   case Left(parseError) =>
-                    logger.error(s"Parse error: $parseError\nBody: $body")
+                    logger.error(s"Parse error: ${Logger.sanitize(parseError.getMessage)} Body: ${Logger.sanitize(body, 500)}")
                     throw ParseException(s"Failed to parse context data: ${parseError.getMessage}", Some(parseError))
                 }
               case Left(error) =>
