@@ -491,6 +491,34 @@ class FixesTest extends AnyFunSuite {
     assert(!context.isFinalized())
   }
 
+  test("ContextOptions units and attributes are applied, method arguments win for units") {
+    val opts = ContextOptions(
+      units = Map("user_id" -> "from_options", "extra" -> "e1"),
+      attributes = Map("plan" -> Json.fromString("pro"))
+    )
+    val context = sdk.createContextWith(Map("user_id" -> "from_args"), testData, opts)
+    assert(context.getUnit("user_id").contains("from_args"))
+    assert(context.getUnit("extra").contains("e1"))
+    assert(context.getAttribute("plan").contains(Json.fromString("pro")))
+  }
+
+  test("publish after finalization started is rejected atomically") {
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = Future.successful(())
+    }
+    val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", publisher = Some(publisher))
+    val context = new SDK(cfg).createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+    Await.result(context.finalizeContext(), 5.seconds)
+    intercept[IllegalStateException] { context.publish() }
+  }
+
   // ======================
   // Fix #7: API key masking
   // ======================

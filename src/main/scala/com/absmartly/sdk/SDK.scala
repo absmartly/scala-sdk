@@ -69,7 +69,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
                     new Context(this, data, units, options, config.eventLogger)
                   case Left(parseError) =>
                     logger.error(s"Parse error: ${Logger.sanitize(parseError.getMessage)} Body: ${Logger.sanitize(body, 500)}")
-                    throw ParseException(s"Failed to parse context data: ${parseError.getMessage}", Some(parseError))
+                    throw ParseException(s"Failed to parse context data: ${Logger.sanitize(String.valueOf(parseError.getMessage))}", Some(parseError))
                 }
               case Left(error) =>
                 logger.error(s"Empty response body: $error")
@@ -226,7 +226,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
                 logger.debug(s"Fetched context data with ${data.experiments.length} experiments")
                 data
               case Left(parseError) =>
-                throw ParseException(s"Failed to parse context data: ${parseError.getMessage}", Some(parseError))
+                throw ParseException(s"Failed to parse context data: ${Logger.sanitize(String.valueOf(parseError.getMessage))}", Some(parseError))
             }
           case Left(error) =>
             throw NetworkException(s"Empty response: $error")
@@ -259,7 +259,7 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
                   logger.debug(s"Fetched context data with ${data.experiments.length} experiments")
                   data
                 case Left(parseError) =>
-                  throw ParseException(s"Failed to parse context data: ${parseError.getMessage}", Some(parseError))
+                  throw ParseException(s"Failed to parse context data: ${Logger.sanitize(String.valueOf(parseError.getMessage))}", Some(parseError))
               }
             case Left(error) =>
               throw NetworkException(s"Empty response: $error")

@@ -34,8 +34,12 @@ class Context(
 
   // Data
   private var _data: ContextData = initialData.getOrElse(ContextData(experiments = List.empty))
-  private val _units: mutable.Map[String, String] = mutable.Map(initialUnits.toSeq: _*)
-  private val _attributes: mutable.ListBuffer[Attribute] = mutable.ListBuffer()
+  // Units passed as method arguments take precedence over ContextOptions.units
+  private val _units: mutable.Map[String, String] = mutable.Map((options.units ++ initialUnits).toSeq: _*)
+  private val _attributes: mutable.ListBuffer[Attribute] = {
+    val now = System.currentTimeMillis()
+    mutable.ListBuffer(options.attributes.toSeq.map { case (name, value) => Attribute(name, value, now) }: _*)
+  }
   private val _overrides: mutable.Map[String, Int] = mutable.Map() ++ options.overrides
   private val _cassignments: mutable.Map[String, Int] = mutable.Map() ++ options.cassignments
 
@@ -307,13 +311,13 @@ class Context(
   // ======================
 
   def publish(): Future[Unit] = {
-    checkReady(expectNotFinalized = true)
-    _flush()
+    _flush(checkAdmission = true)
   }
 
-  private def _flush(): Future[Unit] = {
+  private def _flush(checkAdmission: Boolean = false): Future[Unit] = {
     val done = scala.concurrent.Promise[Unit]()
     val (hashedUnits, exposures, goals, attributes) = lock.synchronized {
+      if (checkAdmission) checkReady(expectNotFinalized = true)
       val e = _exposures.toList
       val g = _goals.toList
       if (e.nonEmpty || g.nonEmpty) {
