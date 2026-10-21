@@ -389,6 +389,7 @@ class Context(
 
   def finalizeContext(): Future[Unit] = {
     val finalization = scala.concurrent.Promise[Unit]()
+    var earlier: List[Future[Unit]] = Nil
     val existing: Option[Future[Unit]] = lock.synchronized {
       if (_finalized) {
         logger.debug("Context already finalized")
@@ -399,6 +400,7 @@ class Context(
       } else {
         _finalizing = true
         _finalizationFuture = Some(finalization.future)
+        earlier = _inflight.toList
         None
       }
     }
@@ -411,7 +413,6 @@ class Context(
     logger.info(s"Finalizing context with $pendingCount pending events")
 
     val flushed = _flush()
-    val earlier = lock.synchronized { _inflight.toList.filterNot(_ eq flushed) }
     val drained = Future.sequence((flushed :: earlier).map(_.transform(scala.util.Success(_)))).flatMap { results =>
       results.collectFirst { case scala.util.Failure(e) => e } match {
         case Some(e) => Future.failed(e)

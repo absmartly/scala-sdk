@@ -66,7 +66,7 @@ object Evaluator {
       case "contains" => evaluateContains(args, vars)
       case "match" => evaluateMatch(args, vars)
       case _ =>
-        logger.error(s"Unknown operator '$op' with args: ${args.noSpaces}")
+        logger.error(s"Unknown operator '${Logger.sanitize(op, 50)}' with args: ${Logger.sanitize(args.noSpaces)}")
         Json.Null
     }
   }

@@ -502,21 +502,53 @@ class FixesTest extends AnyFunSuite {
     assert(context.getAttribute("plan").contains(Json.fromString("pro")))
   }
 
-  test("publish after finalization started is rejected atomically") {
-    val publisher = new ContextPublisher {
+  private def promisePublisher(promises: scala.collection.mutable.Queue[scala.concurrent.Promise[Unit]]): ContextPublisher =
+    new ContextPublisher {
       override def publish(
         units: Map[String, String],
         hashed: Boolean,
         exposures: List[Exposure],
         goals: List[Goal],
         attributes: Option[List[Attribute]]
-      ): Future[Unit] = Future.successful(())
+      ): Future[Unit] = {
+        val p = scala.concurrent.Promise[Unit]()
+        promises.synchronized { promises.enqueue(p) }
+        p.future
+      }
     }
-    val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", publisher = Some(publisher))
-    val context = new SDK(cfg).createContextWith(testUnits, testData)
+
+  private def contextWith(publisher: ContextPublisher): Context =
+    new SDK(SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", publisher = Some(publisher)))
+      .createContextWith(testUnits, testData)
+
+  test("publish while finalization is in progress is rejected") {
+    val promises = scala.collection.mutable.Queue[scala.concurrent.Promise[Unit]]()
+    val context = contextWith(promisePublisher(promises))
     context.treatment("exp_test_ab")
-    Await.result(context.finalizeContext(), 5.seconds)
+    val closing = context.finalizeContext()
+    assert(context.isFinalizing())
+    assert(!closing.isCompleted)
     intercept[IllegalStateException] { context.publish() }
+    promises.dequeue().success(())
+    Await.result(closing, 5.seconds)
+    assert(context.isFinalized())
+  }
+
+  test("finalize accounts for an earlier batch that fails while close flushes a later batch") {
+    val promises = scala.collection.mutable.Queue[scala.concurrent.Promise[Unit]]()
+    val context = contextWith(promisePublisher(promises))
+    context.treatment("exp_test_ab")
+    val a = context.publish()
+    context.track("goal1")
+    val closing = context.finalizeContext()
+    val pa = promises.dequeue()
+    val pb = promises.dequeue()
+    pa.failure(new RuntimeException("A failed"))
+    pb.success(())
+    intercept[RuntimeException] { Await.result(a, 5.seconds) }
+    intercept[RuntimeException] { Await.result(closing, 5.seconds) }
+    assert(!context.isFinalized())
+    assert(context.pending() == 1)
   }
 
   // ======================
