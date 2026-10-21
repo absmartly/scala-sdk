@@ -201,7 +201,7 @@ class FixesTest extends AnyFunSuite {
 
   test("fix2: regex match with long pattern is rejected") {
     val longPattern = "a" * 600
-    val expr = parse(s"""{"match": [{"value": "test"}, {"value": "$longPattern"}]}""").toOption.get
+    val expr = parse(s"""{"match": [{"value": "$longPattern"}, {"value": "$longPattern"}]}""").toOption.get
     val result = com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty)
     assert(result.asBoolean.contains(false))
   }
@@ -535,17 +535,31 @@ class FixesTest extends AnyFunSuite {
   }
 
   test("finalize accounts for an earlier batch that fails while close flushes a later batch") {
-    val promises = scala.collection.mutable.Queue[scala.concurrent.Promise[Unit]]()
-    val context = contextWith(promisePublisher(promises))
+    val pa = scala.concurrent.Promise[Unit]()
+    var calls = 0
+    var firstPublish: Future[Unit] = null
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = {
+        calls += 1
+        if (calls == 1) pa.future
+        else {
+          pa.failure(new RuntimeException("A failed"))
+          intercept[RuntimeException] { Await.result(firstPublish, 5.seconds) }
+          Future.successful(())
+        }
+      }
+    }
+    val context = contextWith(publisher)
     context.treatment("exp_test_ab")
-    val a = context.publish()
+    firstPublish = context.publish()
     context.track("goal1")
     val closing = context.finalizeContext()
-    val pa = promises.dequeue()
-    val pb = promises.dequeue()
-    pa.failure(new RuntimeException("A failed"))
-    pb.success(())
-    intercept[RuntimeException] { Await.result(a, 5.seconds) }
     intercept[RuntimeException] { Await.result(closing, 5.seconds) }
     assert(!context.isFinalized())
     assert(context.pending() == 1)
