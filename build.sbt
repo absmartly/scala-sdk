@@ -2,7 +2,7 @@ name := "absmartly-sdk"
 
 organization := "com.absmartly"
 
-version := "0.1.0"
+version := "0.2.0"
 
 // Cross-build for Scala 2.13 and Scala 3
 scalaVersion := "2.13.12"

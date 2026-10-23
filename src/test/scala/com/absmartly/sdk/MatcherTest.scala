@@ -11,10 +11,10 @@ class MatcherTest extends AnyFunSuite {
     assert(result.isEmpty)
   }
 
-  test("evaluate with empty object returns Some(true)") {
+  test("evaluate with empty object returns None") {
     val matcher = new AudienceMatcher(Map.empty)
     val result = matcher.evaluate(Some("{}"))
-    assert(result.contains(true))
+    assert(result == None)
   }
 
   test("evaluate with empty filter returns true") {
@@ -101,11 +101,10 @@ class MatcherTest extends AnyFunSuite {
     assert(result.contains(true))
   }
 
-  test("evaluate with invalid JSON returns Some(true)") {
+  test("evaluate with invalid JSON returns None") {
     val matcher = new AudienceMatcher(Map.empty)
     val result = matcher.evaluate(Some("invalid json"))
-    // Invalid JSON should return None or Some(true) - need to check implementation
-    assert(result.isDefined)
+    assert(result == None)
   }
 
   test("evaluate complex real-world audience") {

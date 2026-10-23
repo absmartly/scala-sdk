@@ -119,6 +119,18 @@ class ContextTest extends AnyFunSuite {
     sdk.createContextWith(units, data, options)
   }
 
+  def createContextWithRefreshData(
+    refreshData: ContextData,
+    units: Map[String, String] = testUnits,
+    data: ContextData = testData,
+    options: ContextOptions = ContextOptions()
+  ): Context = {
+    val mockSdk = new SDK(config) {
+      override private[sdk] def fetchContextDataBlocking(): ContextData = refreshData
+    }
+    mockSdk.createContextWith(units, data, options)
+  }
+
   test("context is ready immediately with sync creation") {
     val context = createContext()
     assert(context.isReady())
@@ -488,117 +500,115 @@ class ContextTest extends AnyFunSuite {
   }
 
   test("refresh updates context data") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newExperiment = expTestAb.copy(iteration = 2)
     val newData = ContextData(experiments = List(newExperiment, expTestAbc, expTestNotEligible, expTestFullon))
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
 
-    context.refresh(newData)
+    context.refresh()
     val data = context.data()
     assert(data.experiments.head.iteration == 2)
   }
 
   test("refresh keeps overrides") {
-    val context = createContext()
-    context.setOverride("exp_test_ab", 0)
-    assert(context.peek("exp_test_ab") == 0)
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(iteration = 2),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.setOverride("exp_test_ab", 0)
+    assert(context.peek("exp_test_ab") == 0)
+
+    context.refresh()
 
     assert(context.peek("exp_test_ab") == 0)
   }
 
   test("refresh keeps custom assignments") {
-    val context = createContext()
-    context.setCustomAssignment("exp_test_ab", 0)
-    assert(context.peek("exp_test_ab") == 0)
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(iteration = 2),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.setCustomAssignment("exp_test_ab", 0)
+    assert(context.peek("exp_test_ab") == 0)
+
+    context.refresh()
 
     assert(context.peek("exp_test_ab") == 0)
   }
 
   test("refresh clears cache when experiment iteration changes") {
-    val context = createContext()
-    val initial = context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(iteration = 2),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
 
-    val afterRefresh = context.peek("exp_test_ab")
+    context.refresh()
+
     assert(context.data().experiments.head.iteration == 2)
   }
 
   test("refresh clears cache when experiment id changes") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(id = 99),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
+
+    context.refresh()
 
     assert(context.data().experiments.head.id == 99)
   }
 
   test("refresh clears cache when fullOnVariant changes") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(fullOnVariant = 1),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
+
+    context.refresh()
 
     assert(context.data().experiments.head.fullOnVariant == 1)
   }
 
   test("refresh clears cache when trafficSplit changes") {
-    val context = createContext()
-    context.peek("exp_test_ab")
-
     val newData = ContextData(experiments = List(
       expTestAb.copy(trafficSplit = List(0.7, 0.3)),
       expTestAbc,
       expTestNotEligible,
       expTestFullon
     ))
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.peek("exp_test_ab")
+
+    context.refresh()
 
     assert(context.data().experiments.head.trafficSplit == List(0.7, 0.3))
   }
 
   test("refresh clears cache when experiment stopped (removed from list)") {
-    val context = createContext()
+    val newData = ContextData(experiments = List(expTestAbc, expTestNotEligible, expTestFullon))
+    val context = createContextWithRefreshData(refreshData = newData)
     context.peek("exp_test_ab")
     assert(context.pending() == 0)
 
-    val newData = ContextData(experiments = List(expTestAbc, expTestNotEligible, expTestFullon))
-    context.refresh(newData)
+    context.refresh()
 
     val variant = context.peek("exp_test_ab")
     assert(variant == 0)
@@ -626,20 +636,20 @@ class ContextTest extends AnyFunSuite {
       audience = None
     )
 
-    val context = createContext()
     val newData = ContextData(experiments = List(newExp) ++ testData.experiments)
-    context.refresh(newData)
+    val context = createContextWithRefreshData(refreshData = newData)
+    context.refresh()
 
     val variant = context.peek("exp_test_new")
     assert(variant >= 0)
   }
 
-  test("refresh does not re-queue exposures when experiment unchanged") {
-    val context = createContext()
+  test("refresh re-queues exposures even when experiment unchanged") {
+    val context = createContextWithRefreshData(refreshData = testData)
     context.treatment("exp_test_ab")
     assert(context.pending() == 1)
 
-    context.refresh(testData)
+    context.refresh()
 
     context.treatment("exp_test_ab")
     assert(context.pending() == 1)
@@ -659,9 +669,7 @@ class ContextTest extends AnyFunSuite {
 
   test("setCustomAssignment throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.setCustomAssignment("exp_test_ab", 1)
     }
@@ -669,9 +677,7 @@ class ContextTest extends AnyFunSuite {
 
   test("setUnit throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.setUnit("new_unit", "value")
     }
@@ -679,59 +685,54 @@ class ContextTest extends AnyFunSuite {
 
   test("setAttribute throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.setAttribute("attr", Json.fromInt(1))
     }
   }
 
-  test("treatment throws after finalized") {
-    val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.treatment("exp_test_ab")
+  // D1: reads reject unavailable contexts instead of returning defaults.
+  for ((state, message) <- List(
+    "not ready" -> "ABsmartly Context is not yet ready.",
+    "finalized" -> "ABsmartly Context is finalized."
+  )) {
+    test(s"all experiment reads throw when $state") {
+      val context = if (state == "not ready") {
+        new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+      } else {
+        val ready = createContext()
+        scala.concurrent.Await.result(ready.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
+        ready
+      }
+      val reads: List[() => Any] = List(
+        () => context.treatment("exp_test_ab"),
+        () => context.peek("exp_test_ab"),
+        () => context.variableValue("key", "default"),
+        () => context.peekVariableValue("key", "default"),
+        () => context.variableKeys(),
+        () => context.customFieldKeys(),
+        () => context.customFieldValue("exp_test_ab", "field"),
+        () => context.customFieldValueType("exp_test_ab", "field")
+      )
+      reads.foreach { read =>
+        assert(intercept[IllegalStateException](read()).getMessage == message)
+      }
     }
   }
 
-  test("peek throws after finalized") {
+  test("experiments requires ready but works after finalize") {
+    val unready = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(intercept[IllegalStateException](unready.experiments()).getMessage == "ABsmartly Context is not yet ready.")
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.peek("exp_test_ab")
-    }
-  }
-
-  test("variableValue throws after finalized") {
-    val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.variableValue("key", "default")
-    }
-  }
-
-  test("peekVariableValue throws after finalized") {
-    val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
-    assertThrows[IllegalStateException] {
-      context.peekVariableValue("key", "default")
-    }
+    val before = context.experiments()
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
+    assert(context.isFinalized())
+    assert(context.experiments() == before)
   }
 
   test("track throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.track("goal")
     }
@@ -739,9 +740,7 @@ class ContextTest extends AnyFunSuite {
 
   test("publish throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.publish()
     }
@@ -749,9 +748,7 @@ class ContextTest extends AnyFunSuite {
 
   test("refresh throws after finalized") {
     val context = createContext()
-    val field = context.getClass.getDeclaredField("_finalized")
-    field.setAccessible(true)
-    field.setBoolean(context, true)
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
     assertThrows[IllegalStateException] {
       context.refresh(testData)
     }

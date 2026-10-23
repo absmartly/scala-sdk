@@ -102,8 +102,8 @@ class UtilsTest extends AnyFunSuite {
     assert(Utils.numberConvert(Json.fromDouble(1.5).get) == Some(1.5))
   }
 
-  test("numberConvert empty string returns Some(0.0)") {
-    assert(Utils.numberConvert(Json.fromString("")) == Some(0.0))
+  test("numberConvert empty string returns None like parseFloat") {
+    assert(Utils.numberConvert(Json.fromString("")) == None)
   }
 
   test("numberConvert '123' returns Some(123.0)") {
