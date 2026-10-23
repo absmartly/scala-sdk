@@ -709,7 +709,6 @@ class ContextTest extends AnyFunSuite {
         () => context.peek("exp_test_ab"),
         () => context.variableValue("key", "default"),
         () => context.peekVariableValue("key", "default"),
-        () => context.experiments(),
         () => context.variableKeys(),
         () => context.customFieldKeys(),
         () => context.customFieldValue("exp_test_ab", "field"),
@@ -719,6 +718,16 @@ class ContextTest extends AnyFunSuite {
         assert(intercept[IllegalStateException](read()).getMessage == message)
       }
     }
+  }
+
+  test("experiments requires ready but works after finalize") {
+    val unready = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+    assert(intercept[IllegalStateException](unready.experiments()).getMessage == "ABsmartly Context is not yet ready.")
+    val context = createContext()
+    val before = context.experiments()
+    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
+    assert(context.isFinalized())
+    assert(context.experiments() == before)
   }
 
   test("track throws after finalized") {

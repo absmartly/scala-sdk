@@ -99,7 +99,7 @@ class Context(
   }
 
   def experiments(): List[String] = lock.synchronized {
-    checkReady(expectNotFinalized = true)
+    checkReady()
     _data.experiments.map(_.name)
   }
 
