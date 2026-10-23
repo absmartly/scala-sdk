@@ -79,7 +79,7 @@ object Murmur3 {
    * Hash a string (UTF-8 bytes)
    */
   def hashString(str: String, seed: Int = 0): Int = {
-    hash32(str.getBytes("UTF-8"), seed)
+    hash32(Utils.utf8Bytes(str), seed)
   }
 }
 

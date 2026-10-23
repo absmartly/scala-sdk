@@ -429,16 +429,19 @@ class FixesTest extends AnyFunSuite {
     assert(Thread.getAllStackTraces.keySet.size <= before + 1)
   }
 
-  test("successful finalize emits the documented close event") {
-    val events = scala.collection.mutable.ListBuffer[String]()
-    val sink = new EventLogger {
-      override def logEvent(eventType: String, data: Json): Unit = events += eventType
+  test("successful finalize emits finalize exactly once through both aliases") {
+    List(false, true).foreach { useClose =>
+      val events = scala.collection.mutable.ListBuffer[String]()
+      val sink = new EventLogger {
+        override def logEvent(eventType: String, data: Json): Unit = events += eventType
+      }
+      val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", eventLogger = sink)
+      val context = new SDK(cfg).createContextWith(testUnits, testData)
+      Await.result(if (useClose) context.close() else context.finalizeContext(), 5.seconds)
+      Await.result(context.finalizeContext(), 5.seconds)
+      assert(events.count(_ == "finalize") == 1)
+      assert(!events.contains("close"))
     }
-    val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", eventLogger = sink)
-    val context = new SDK(cfg).createContextWith(testUnits, testData)
-    Await.result(context.finalizeContext(), 5.seconds)
-    assert(events.contains("close"))
-    assert(!events.contains("finalize"))
   }
 
   test("throwing configured Logger does not change operation outcomes") {
@@ -599,7 +602,7 @@ class FixesTest extends AnyFunSuite {
   test("fix11: AudienceMatcher catches non-fatal exceptions gracefully") {
     val matcher = new AudienceMatcher(Map.empty)
     val result = matcher.evaluate(Some("invalid json {{{"))
-    assert(result.contains(true))
+    assert(result == None)
   }
 
   // ======================
@@ -847,15 +850,15 @@ class FixesTest extends AnyFunSuite {
 
   test("not ready error message is standardized") {
     val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
-    val result = context.treatment("exp_test_ab")
-    assert(result == 0)
+    val ex = intercept[IllegalStateException](context.treatment("exp_test_ab"))
+    assert(ex.getMessage == "ABsmartly Context is not yet ready.")
   }
 
   test("finalized error message is standardized") {
     val context = createContext()
     Await.result(context.close(), 5.seconds)
-    val result = context.treatment("exp_test_ab")
-    assert(result == 0)
+    val ex = intercept[IllegalStateException](context.treatment("exp_test_ab"))
+    assert(ex.getMessage == "ABsmartly Context is finalized.")
   }
 
   test("unit UID blank error message is standardized") {

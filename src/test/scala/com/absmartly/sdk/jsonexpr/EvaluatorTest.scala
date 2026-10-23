@@ -44,10 +44,10 @@ class EvaluatorTest extends AnyFunSuite {
   }
 
   // OR operator tests
-  test("or with empty array returns false") {
+  test("or with empty array returns true") {
     val expr = parse("""{"or": []}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(false))
+    assert(result == Json.True)
   }
 
   test("or with at least one true returns true") {
@@ -170,10 +170,10 @@ class EvaluatorTest extends AnyFunSuite {
     assert(result.asBoolean.contains(false))
   }
 
-  test("gt with null returns false") {
+  test("gt with null returns null") {
     val expr = parse("""{"gt": [{"value": null}, {"value": 0}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(false))
+    assert(result == Json.Null)
   }
 
   // GTE operator tests
@@ -240,10 +240,10 @@ class EvaluatorTest extends AnyFunSuite {
     assert(result.asBoolean.contains(false))
   }
 
-  test("in returns false when either operand is null") {
+  test("in returns null when either operand is null") {
     val expr = parse("""{"in": [{"value": null}, {"value": "test"}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(false))
+    assert(result == Json.Null)
   }
 
   // MATCH operator tests
@@ -265,16 +265,16 @@ class EvaluatorTest extends AnyFunSuite {
     assert(result.asBoolean.contains(true))
   }
 
-  test("match returns false when text is null") {
+  test("match returns null when text is null") {
     val expr = parse("""{"match": [{"value": null}, {"value": "test"}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(false))
+    assert(result == Json.Null)
   }
 
-  test("match returns false when pattern is null") {
+  test("match returns null when pattern is null") {
     val expr = parse("""{"match": [{"value": "test"}, {"value": null}]}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(false))
+    assert(result == Json.Null)
   }
 
   // Complex nested expressions
@@ -290,10 +290,10 @@ class EvaluatorTest extends AnyFunSuite {
     assert(result.asBoolean.contains(true))
   }
 
-  test("empty object evaluates to true") {
+  test("empty object evaluates to null") {
     val expr = parse("""{}""").toOption.get
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asBoolean.contains(true))
+    assert(result == Json.Null)
   }
 
   test("null expression returns null") {
@@ -301,10 +301,24 @@ class EvaluatorTest extends AnyFunSuite {
     assert(result.isNull)
   }
 
-  test("literal value returns itself") {
+  test("bare literal requires the value operator") {
     val expr = Json.fromInt(42)
     val result = Evaluator.evaluate(expr, vars)
-    assert(result.asNumber.flatMap(_.toInt).contains(42))
+    assert(result == Json.Null)
+    assert(Evaluator.evaluate(Json.obj("value" -> expr), vars) == expr)
+  }
+
+  test("invalid regex returns null rather than a mismatch") {
+    val expr = parse("""{"match":[{"value":"test"},{"value":"["}]}""").toOption.get
+    assert(Evaluator.evaluate(expr, vars) == Json.Null)
+  }
+
+  test("all binary operators short-circuit either null operand") {
+    for (op <- List("eq", "gt", "gte", "lt", "lte", "in", "contains", "match");
+         operands <- List(Vector(Json.Null, Json.fromString("x")), Vector(Json.fromString("x"), Json.Null))) {
+      val expr = Json.obj(op -> Json.fromValues(operands.map(v => Json.obj("value" -> v))))
+      assert(Evaluator.evaluate(expr, vars) == Json.Null, s"$op: $operands")
+    }
   }
 
   test("unknown operator returns null") {

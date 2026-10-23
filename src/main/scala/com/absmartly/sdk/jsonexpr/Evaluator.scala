@@ -5,14 +5,15 @@ import com.absmartly.sdk.{Utils, Logger}
 import scala.util.{Try, Success, Failure}
 
 /**
- * JSON Expression Evaluator for audience targeting
+ * JSON Expression Evaluator for audience targeting.
  *
- * Implements 13 operators:
- * - and, or, not
- * - null
- * - var, value
- * - eq, gt, gte, lt, lte
- * - in, match
+ * Mirrors the JavaScript SDK's jsonexpr: an array is an implicit `and`, an
+ * object is `{operator: args}`, anything else (and an unknown operator)
+ * evaluates to null. Binary operators return null when either operand
+ * evaluates to null.
+ *
+ * Operators: and, or, not, null, var, value, eq, gt, gte, lt, lte,
+ * in (haystack-first; `contains` is an alias), match.
  */
 object Evaluator {
 
@@ -26,26 +27,18 @@ object Evaluator {
   /**
    * Evaluate a JSON expression against a context
    *
-   * @param expr The expression to evaluate (JSON object with operator)
+   * @param expr The expression to evaluate (an array, or a JSON object with one operator)
    * @param vars The context variables (for 'var' operator)
-   * @return The result of evaluation
+   * @return The result of evaluation, Json.Null when indeterminate
    */
   def evaluate(expr: Json, vars: Map[String, Json]): Json = {
-    if (expr.isNull) {
-      return Json.Null
-    }
-
-    expr.asObject match {
-      case None => expr // Literal value
-      case Some(obj) =>
-        if (obj.isEmpty) {
-          // Empty object evaluates to true
-          return Json.fromBoolean(true)
-        }
-
-        // Get the operator and its arguments
-        val (op, args) = obj.toList.head
-        evaluateOperator(op, args, vars)
+    if (expr.isArray) {
+      evaluateAnd(expr, vars)
+    } else {
+      expr.asObject.flatMap(_.toList.headOption) match {
+        case Some((op, args)) => evaluateOperator(op, args, vars)
+        case None => Json.Null
+      }
     }
   }
 
@@ -57,241 +50,125 @@ object Evaluator {
       case "null" => evaluateNull(args, vars)
       case "var" => evaluateVar(args, vars)
       case "value" => args // Literal value
-      case "eq" => evaluateEq(args, vars)
-      case "gt" => evaluateGt(args, vars)
-      case "gte" => evaluateGte(args, vars)
-      case "lt" => evaluateLt(args, vars)
-      case "lte" => evaluateLte(args, vars)
-      case "in" => evaluateContains(args, vars)
-      case "contains" => evaluateContains(args, vars)
-      case "match" => evaluateMatch(args, vars)
+      case "eq" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ == 0))
+      case "gt" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ > 0))
+      case "gte" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ >= 0))
+      case "lt" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ < 0))
+      case "lte" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ <= 0))
+      case "in" | "contains" => binary(args, vars)(evaluateIn)
+      case "match" => binary(args, vars)(evaluateMatch)
       case _ =>
         logger.error(s"Unknown operator '${Logger.sanitize(op, 50)}' with args: ${Logger.sanitize(args.noSpaces)}")
         Json.Null
     }
   }
 
-  // AND operator: all arguments must be truthy
+  private def truthy(value: Json): Boolean = Utils.booleanConvert(value).getOrElse(false)
+
+  // AND operator: all arguments must be truthy; an empty AND is true
   private def evaluateAnd(args: Json, vars: Map[String, Json]): Json = {
     args.asArray match {
-      case Some(arr) =>
-        if (arr.isEmpty) {
-          Json.fromBoolean(true) // Empty AND is true
-        } else {
-          val result = arr.forall { arg =>
-            val value = evaluate(arg, vars)
-            Utils.booleanConvert(value).getOrElse(false)
-          }
-          Json.fromBoolean(result)
-        }
-      case None => Json.fromBoolean(false)
+      case Some(arr) => Json.fromBoolean(arr.forall(arg => truthy(evaluate(arg, vars))))
+      case None => Json.Null
     }
   }
 
-  // OR operator: any argument must be truthy
+  // OR operator: any argument must be truthy; an empty OR is true
   private def evaluateOr(args: Json, vars: Map[String, Json]): Json = {
     args.asArray match {
-      case Some(arr) =>
-        if (arr.isEmpty) {
-          Json.fromBoolean(false) // Empty OR is false
-        } else {
-          val result = arr.exists { arg =>
-            val value = evaluate(arg, vars)
-            Utils.booleanConvert(value).getOrElse(false)
-          }
-          Json.fromBoolean(result)
-        }
-      case None => Json.fromBoolean(false)
+      case Some(arr) => Json.fromBoolean(arr.isEmpty || arr.exists(arg => truthy(evaluate(arg, vars))))
+      case None => Json.Null
     }
   }
 
   // NOT operator: negate boolean value
   private def evaluateNot(args: Json, vars: Map[String, Json]): Json = {
-    val value = evaluate(args, vars)
-    val boolValue = Utils.booleanConvert(value).getOrElse(false)
-    Json.fromBoolean(!boolValue)
+    Json.fromBoolean(!truthy(evaluate(args, vars)))
   }
 
   // NULL operator: check if value is null
   private def evaluateNull(args: Json, vars: Map[String, Json]): Json = {
-    val value = evaluate(args, vars)
-    Json.fromBoolean(value.isNull)
+    Json.fromBoolean(evaluate(args, vars).isNull)
   }
 
-  // VAR operator: extract variable from context
+  // VAR operator: extract variable from context; the path is a string or {"path": string}
   private def evaluateVar(args: Json, vars: Map[String, Json]): Json = {
-    args.asString match {
+    val pathOpt = args.asString.orElse(args.asObject.flatMap(_("path")).flatMap(_.asString))
+    pathOpt match {
       case Some(path) =>
-        // Split path by '/' and traverse
-        val parts = path.split('/').filter(_.nonEmpty)
-        var current = Json.fromFields(vars)
-
-        for (part <- parts) {
-          current = current.asObject match {
-            case Some(obj) => obj(part).getOrElse {
-              logger.debug(s"Variable path '$path' - key '$part' not found")
-              Json.Null
-            }
-            case None =>
-              logger.debug(s"Variable path '$path' - expected object at '$part'")
-              Json.Null
+        path.split("/", -1).foldLeft(Option(Json.fromFields(vars))) { (target, frag) =>
+          target.flatMap { current =>
+            current.asObject.flatMap(_(frag))
+              .orElse(current.asArray.flatMap(arr => frag.toIntOption.flatMap(arr.lift)))
           }
-        }
-        current
+        }.getOrElse(Json.Null)
       case None => Json.Null
     }
   }
 
-  // EQ operator: equality comparison
-  private def evaluateEq(args: Json, vars: Map[String, Json]): Json = {
+  private def binary(args: Json, vars: Map[String, Json])(op: (Json, Json) => Option[Boolean]): Json = {
     args.asArray match {
-      case Some(arr) if arr.length >= 2 =>
-        val lhs = evaluate(arr(0), vars)
-        val rhs = evaluate(arr(1), vars)
-
-        // A null operand short-circuits to null (canonical: eq does not treat
-        // null == null as a match), matching the other SDKs and the collector.
-        if (lhs.isNull || rhs.isNull) {
+      case Some(arr) =>
+        val lhs = arr.headOption.map(evaluate(_, vars)).getOrElse(Json.Null)
+        if (lhs.isNull) {
           Json.Null
         } else {
-          Utils.compare(lhs, rhs) match {
-            case Some(0) => Json.fromBoolean(true)
-            case Some(_) => Json.fromBoolean(false)
-            case None    => Json.Null
+          val rhs = arr.lift(1).map(evaluate(_, vars)).getOrElse(Json.Null)
+          if (rhs.isNull) Json.Null
+          else op(lhs, rhs).map(Json.fromBoolean).getOrElse(Json.Null)
+        }
+      case None => Json.Null
+    }
+  }
+
+  // IN operator (also registered as "contains"). Haystack-first: [haystack, needle].
+  // Array: any item compares equal; string: substring; object: key lookup; otherwise null.
+  private def evaluateIn(haystack: Json, needle: Json): Option[Boolean] = {
+    haystack.asArray match {
+      case Some(items) =>
+        if (items.size > MAX_ARRAY_SIZE_WARNING) {
+          logger.warn(s"Large array in 'in' operator: ${items.size} elements (performance warning)")
+        }
+        Some(items.exists(item => Utils.compare(item, needle).contains(0)))
+      case None =>
+        haystack.asString match {
+          case Some(str) => Some(Utils.stringConvert(needle).exists(str.contains(_)))
+          case None =>
+            haystack.asObject.map(obj => Utils.stringConvert(needle).exists(obj.contains))
+        }
+    }
+  }
+
+  // MATCH operator: invalid patterns yield null (D5). Preserve the SDK's
+  // existing false result for resource-limit rejection and matching deadlines.
+  private def evaluateMatch(text: Json, pattern: Json): Option[Boolean] = {
+    for {
+      textStr <- Utils.stringConvert(text)
+      patternStr <- Utils.stringConvert(pattern)
+      result <- {
+        if (patternStr.length > MAX_PATTERN_LENGTH) {
+          logger.warn(s"Regex pattern too long: ${patternStr.length} chars (max $MAX_PATTERN_LENGTH)")
+          Some(false)
+        } else if (textStr.length > MAX_INPUT_LENGTH) {
+          logger.warn(s"Regex input too long: ${textStr.length} chars (max $MAX_INPUT_LENGTH)")
+          Some(false)
+        } else {
+          Try(patternStr.r) match {
+            case Success(regex) =>
+              try {
+                Some(regex.findFirstIn(new DeadlineCharSequence(textStr, System.nanoTime() + REGEX_TIMEOUT_MS * 1000000L)).isDefined)
+              } catch {
+                case _: RegexTimeoutException =>
+                  logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='${Logger.sanitize(patternStr)}'")
+                  Some(false)
+              }
+            case Failure(e) =>
+              logger.warn(s"Invalid regex pattern: '${Logger.sanitize(patternStr)}' - ${Logger.sanitize(String.valueOf(e.getMessage))}")
+              None
           }
         }
-      case _ => Json.fromBoolean(false)
-    }
-  }
-
-  // GT operator: greater than
-  private def evaluateGt(args: Json, vars: Map[String, Json]): Json = {
-    args.asArray match {
-      case Some(arr) if arr.length >= 2 =>
-        val lhs = evaluate(arr(0), vars)
-        val rhs = evaluate(arr(1), vars)
-
-        Utils.compare(lhs, rhs) match {
-          case Some(cmp) => Json.fromBoolean(cmp > 0)
-          case None => Json.fromBoolean(false)
-        }
-      case _ => Json.fromBoolean(false)
-    }
-  }
-
-  // GTE operator: greater than or equal
-  private def evaluateGte(args: Json, vars: Map[String, Json]): Json = {
-    args.asArray match {
-      case Some(arr) if arr.length >= 2 =>
-        val lhs = evaluate(arr(0), vars)
-        val rhs = evaluate(arr(1), vars)
-
-        Utils.compare(lhs, rhs) match {
-          case Some(cmp) => Json.fromBoolean(cmp >= 0)
-          case None => Json.fromBoolean(false)
-        }
-      case _ => Json.fromBoolean(false)
-    }
-  }
-
-  // LT operator: less than
-  private def evaluateLt(args: Json, vars: Map[String, Json]): Json = {
-    args.asArray match {
-      case Some(arr) if arr.length >= 2 =>
-        val lhs = evaluate(arr(0), vars)
-        val rhs = evaluate(arr(1), vars)
-
-        Utils.compare(lhs, rhs) match {
-          case Some(cmp) => Json.fromBoolean(cmp < 0)
-          case None => Json.fromBoolean(false)
-        }
-      case _ => Json.fromBoolean(false)
-    }
-  }
-
-  // LTE operator: less than or equal
-  private def evaluateLte(args: Json, vars: Map[String, Json]): Json = {
-    args.asArray match {
-      case Some(arr) if arr.length >= 2 =>
-        val lhs = evaluate(arr(0), vars)
-        val rhs = evaluate(arr(1), vars)
-
-        Utils.compare(lhs, rhs) match {
-          case Some(cmp) => Json.fromBoolean(cmp <= 0)
-          case None => Json.fromBoolean(false)
-        }
-      case _ => Json.fromBoolean(false)
-    }
-  }
-
-  // CONTAINS operator (also registered under the legacy alias "in").
-  // Operand order is haystack-first: [haystack, needle]. This matches the
-  // collector and the other ABsmartly SDKs.
-  private def evaluateContains(args: Json, vars: Map[String, Json]): Json = {
-    args.asArray match {
-      case Some(arr) if arr.length >= 2 =>
-        val haystack = evaluate(arr(0), vars)
-        val needle = evaluate(arr(1), vars)
-
-        // Check if haystack contains needle
-        val result: Boolean = (needle, haystack) match {
-          case (n, h) if n.isNull || h.isNull => false
-          case (n, h) if h.isArray =>
-            val haystackArray = h.asArray.getOrElse(Vector.empty)
-            if (haystackArray.size > MAX_ARRAY_SIZE_WARNING) {
-              logger.warn(s"Large array in 'contains' operator: ${haystackArray.size} elements (performance warning)")
-            }
-            haystackArray.contains(n)
-          case (n, h) if h.isString && n.isString =>
-            (for {
-              haystackStr <- h.asString
-              needleStr <- n.asString
-            } yield haystackStr.contains(needleStr)).getOrElse(false)
-          case _ => false
-        }
-
-        Json.fromBoolean(result)
-      case _ => Json.fromBoolean(false)
-    }
-  }
-
-  // MATCH operator: regex matching with ReDoS protection
-  private def evaluateMatch(args: Json, vars: Map[String, Json]): Json = {
-    args.asArray match {
-      case Some(arr) if arr.length >= 2 =>
-        val text = evaluate(arr(0), vars)
-        val pattern = evaluate(arr(1), vars)
-
-        val result = (for {
-          textStr <- text.asString
-          patternStr <- pattern.asString
-        } yield {
-          if (patternStr.length > MAX_PATTERN_LENGTH) {
-            logger.warn(s"Regex pattern too long: ${patternStr.length} chars (max $MAX_PATTERN_LENGTH)")
-            false
-          } else if (textStr.length > MAX_INPUT_LENGTH) {
-            logger.warn(s"Regex input too long: ${textStr.length} chars (max $MAX_INPUT_LENGTH)")
-            false
-          } else {
-            Try(patternStr.r) match {
-              case Success(regex) =>
-                try {
-                  regex.findFirstIn(new DeadlineCharSequence(textStr, System.nanoTime() + REGEX_TIMEOUT_MS * 1000000L)).isDefined
-                } catch {
-                  case _: RegexTimeoutException =>
-                    logger.error(s"Regex timeout after ${REGEX_TIMEOUT_MS}ms: pattern='${Logger.sanitize(patternStr)}'")
-                    false
-                }
-              case Failure(e) =>
-                logger.warn(s"Invalid regex pattern: '${Logger.sanitize(patternStr)}' - ${Logger.sanitize(String.valueOf(e.getMessage))}")
-                false
-            }
-          }
-        }).getOrElse(false)
-
-        Json.fromBoolean(result)
-      case _ => Json.fromBoolean(false)
-    }
+      }
+    } yield result
   }
 }
 

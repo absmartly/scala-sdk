@@ -12,55 +12,34 @@ class AudienceMatcher(vars: Map[String, Json]) {
   private val logger = Logger.safe
 
   /**
-   * Evaluate audience filter
+   * Evaluate audience filter (JS `AudienceMatcher.evaluate`).
    *
    * @param audience Optional audience filter JSON string
-   * @return Some(true) if matches, Some(false) if doesn't match, None if no filter or error
+   * @return Some(true) if matches, Some(false) if it doesn't, None when there is
+   *         no usable filter (absent, unparseable, or not an array/object) or the
+   *         evaluation fails. Callers treat None as "no audience decision".
    */
   def evaluate(audience: Option[String]): Option[Boolean] = {
-    audience match {
-      case None => None
-      case Some(audienceStr) =>
-        try {
-          io.circe.parser.parse(audienceStr) match {
-            case Right(json) =>
-              json.asObject match {
-                case Some(obj) =>
-                  obj("filter") match {
-                    case Some(filter) =>
-                      // If filter is an array, treat as AND operation
-                      val result = filter.asArray match {
-                        case Some(arr) if arr.isEmpty =>
-                          Json.True // Empty filter matches all
-                        case Some(arr) =>
-                          // Evaluate each filter and AND them together
-                          val allTrue = arr.forall { f =>
-                            val res = Evaluator.evaluate(f, vars)
-                            Utils.booleanConvert(res).getOrElse(false)
-                          }
-                          Json.fromBoolean(allTrue)
-                        case None =>
-                          // Single filter expression
-                          Evaluator.evaluate(filter, vars)
-                      }
-                      Some(Utils.booleanConvert(result).getOrElse(false))
-                    case None =>
-                      logger.warn(s"Audience missing 'filter' key, defaulting to match all: ${Logger.sanitize(audienceStr)}")
-                      Some(true)
-                  }
-                case None =>
-                  logger.warn(s"Audience not an object, defaulting to match all: ${Logger.sanitize(audienceStr)}")
-                  Some(true)
-              }
-            case Left(parseError) =>
-              logger.error(s"Audience parse error, defaulting to match all: ${Logger.sanitize(parseError.getMessage)} Audience: ${Logger.sanitize(audienceStr)}")
-              Some(true)
-          }
-        } catch {
-          case NonFatal(e) =>
-            logger.error(s"Audience evaluation error: ${Logger.sanitize(String.valueOf(e.getMessage))} Audience: ${Logger.sanitize(audienceStr)}", e)
+    audience.flatMap { audienceStr =>
+      try {
+        io.circe.parser.parse(audienceStr) match {
+          case Right(json) =>
+            json.asObject.flatMap(_("filter")).filter(f => f.isArray || f.isObject) match {
+              case Some(filter) =>
+                Some(Utils.booleanConvert(Evaluator.evaluate(filter, vars)).getOrElse(false))
+              case None =>
+                logger.debug(s"Audience has no array/object 'filter', ignoring: ${Logger.sanitize(audienceStr)}")
+                None
+            }
+          case Left(parseError) =>
+            logger.error(s"Audience parse error, ignoring audience: ${Logger.sanitize(parseError.getMessage)} Audience: ${Logger.sanitize(audienceStr)}")
             None
         }
+      } catch {
+        case NonFatal(e) =>
+          logger.error(s"Audience evaluation error: ${Logger.sanitize(String.valueOf(e.getMessage))} Audience: ${Logger.sanitize(audienceStr)}", e)
+          None
+      }
     }
   }
 }

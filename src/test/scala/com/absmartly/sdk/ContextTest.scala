@@ -691,58 +691,34 @@ class ContextTest extends AnyFunSuite {
     }
   }
 
-  test("treatment returns 0 after finalized") {
-    val context = createContext()
-    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
-    assert(context.treatment("exp_test_ab") == 0)
-  }
-
-  test("peek returns 0 after finalized") {
-    val context = createContext()
-    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
-    assert(context.peek("exp_test_ab") == 0)
-  }
-
-  test("variableValue returns defaultValue after finalized") {
-    val context = createContext()
-    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
-    assert(context.variableValue("key", "default") == "default")
-  }
-
-  test("peekVariableValue returns defaultValue after finalized") {
-    val context = createContext()
-    scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
-    assert(context.peekVariableValue("key", "default") == "default")
-  }
-
-  test("treatment returns 0 when not ready") {
-    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
-    assert(context.treatment("exp_test_ab") == 0)
-  }
-
-  test("peek returns 0 when not ready") {
-    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
-    assert(context.peek("exp_test_ab") == 0)
-  }
-
-  test("variableValue returns defaultValue when not ready") {
-    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
-    assert(context.variableValue("key", "default") == "default")
-  }
-
-  test("peekVariableValue returns defaultValue when not ready") {
-    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
-    assert(context.peekVariableValue("key", "default") == "default")
-  }
-
-  test("experiments returns empty list when not ready") {
-    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
-    assert(context.experiments() == List.empty)
-  }
-
-  test("variableKeys returns empty map when not ready") {
-    val context = new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
-    assert(context.variableKeys() == Map.empty)
+  // D1: reads reject unavailable contexts instead of returning defaults.
+  for ((state, message) <- List(
+    "not ready" -> "ABsmartly Context is not yet ready.",
+    "finalized" -> "ABsmartly Context is finalized."
+  )) {
+    test(s"all experiment reads throw when $state") {
+      val context = if (state == "not ready") {
+        new Context(sdk, None, Map.empty, ContextOptions())(scala.concurrent.ExecutionContext.global)
+      } else {
+        val ready = createContext()
+        scala.concurrent.Await.result(ready.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
+        ready
+      }
+      val reads: List[() => Any] = List(
+        () => context.treatment("exp_test_ab"),
+        () => context.peek("exp_test_ab"),
+        () => context.variableValue("key", "default"),
+        () => context.peekVariableValue("key", "default"),
+        () => context.experiments(),
+        () => context.variableKeys(),
+        () => context.customFieldKeys(),
+        () => context.customFieldValue("exp_test_ab", "field"),
+        () => context.customFieldValueType("exp_test_ab", "field")
+      )
+      reads.foreach { read =>
+        assert(intercept[IllegalStateException](read()).getMessage == message)
+      }
+    }
   }
 
   test("track throws after finalized") {

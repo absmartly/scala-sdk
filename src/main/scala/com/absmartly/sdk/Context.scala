@@ -99,7 +99,7 @@ class Context(
   }
 
   def experiments(): List[String] = lock.synchronized {
-    if (!_ready) return List.empty
+    checkReady(expectNotFinalized = true)
     _data.experiments.map(_.name)
   }
 
@@ -198,16 +198,14 @@ class Context(
   // ======================
 
   def treatment(experimentName: String): Int = lock.synchronized {
-    if (!_ready) return 0
-    if (_finalized || _finalizing) return 0
+    checkReady(expectNotFinalized = true)
     val assignment = _assign(experimentName)
     _queueExposure(assignment)
     assignment.variant
   }
 
   def peek(experimentName: String): Int = lock.synchronized {
-    if (!_ready) return 0
-    if (_finalized || _finalizing) return 0
+    checkReady(expectNotFinalized = true)
     _assign(experimentName).variant
   }
 
@@ -216,19 +214,17 @@ class Context(
   // ======================
 
   def variableValue(key: String, defaultValue: String): String = lock.synchronized {
-    if (!_ready) return defaultValue
-    if (_finalized || _finalizing) return defaultValue
+    checkReady(expectNotFinalized = true)
     _variableValue(key, defaultValue, queueExposure = true)
   }
 
   def peekVariableValue(key: String, defaultValue: String): String = lock.synchronized {
-    if (!_ready) return defaultValue
-    if (_finalized || _finalizing) return defaultValue
+    checkReady(expectNotFinalized = true)
     _variableValue(key, defaultValue, queueExposure = false)
   }
 
-  def variableKeys(): Map[String, List[String]] = {
-    if (!_ready) return Map.empty
+  def variableKeys(): Map[String, List[String]] = lock.synchronized {
+    checkReady(expectNotFinalized = true)
     _indexVariables.map { case (key, exps) =>
       key -> exps.map(_.name)
     }
@@ -238,8 +234,8 @@ class Context(
   // Custom Fields Methods (Not fully implemented - placeholder)
   // ======================
 
-  def customFieldValue(experimentName: String, fieldName: String): Option[Json] = {
-    if (!_ready) return None
+  def customFieldValue(experimentName: String, fieldName: String): Option[Json] = lock.synchronized {
+    checkReady(expectNotFinalized = true)
     _index.get(experimentName).flatMap { exp =>
       exp.customFieldValues.flatMap { fields =>
         fields.find(_.name == fieldName).map { field =>
@@ -264,15 +260,15 @@ class Context(
     }
   }
 
-  def customFieldKeys(): List[String] = {
-    if (!_ready) return List.empty
+  def customFieldKeys(): List[String] = lock.synchronized {
+    checkReady(expectNotFinalized = true)
     _index.values.flatMap { exp =>
       exp.customFieldValues.map(_.map(_.name)).getOrElse(List.empty)
     }.toList.distinct
   }
 
-  def customFieldValueType(experimentName: String, fieldName: String): Option[String] = {
-    if (!_ready) return None
+  def customFieldValueType(experimentName: String, fieldName: String): Option[String] = lock.synchronized {
+    checkReady(expectNotFinalized = true)
     _index.get(experimentName).flatMap { exp =>
       exp.customFieldValues.flatMap { fields =>
         fields.find(_.name == fieldName).map(_.`type`)
@@ -334,6 +330,7 @@ class Context(
     } else {
       logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
 
+      var publishEventJson: Json = Json.Null
       val publishFuture =
         try {
           val unitsList = hashedUnits.map { case (unitType, hashedUid) =>
@@ -349,13 +346,16 @@ class Context(
             attributes = if (attributes.nonEmpty) Some(attributes) else None
           )
 
-          safeLog("publish", publishEvent.asJson)
+          publishEventJson = publishEvent.asJson
 
           val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
-          sdk.getConfig.publisher match {
+          val sent = sdk.getConfig.publisher match {
             case Some(publisher) => publisher.publish(hashedUnits, true, exposures, goals, attrOpt)
             case None => sdk.publish(hashedUnits, true, exposures, goals, attrOpt)
           }
+          // A publisher returning null must not strand the drained batch in flight.
+          if (sent == null) Future.failed(new IllegalStateException("ContextPublisher returned a null Future"))
+          else sent
         } catch {
           case scala.util.control.NonFatal(e) => Future.failed(e)
         }
@@ -369,6 +369,8 @@ class Context(
             }
             logger.error(s"Publish failed: ${ex.getMessage}", ex)
           case _ =>
+            // Like the JS SDK, the "publish" event reports a delivered batch only.
+            safeLog("publish", publishEventJson)
         }
         lock.synchronized { _inflight -= done.future }
         done.complete(result.map(_ => ()))
@@ -426,7 +428,7 @@ class Context(
         _finalizing = false
         _finalizationFuture = None
       }
-      safeLog("close", Json.Null)
+      safeLog("finalize", Json.Null)
       logger.info("Context finalized successfully")
     }.recoverWith { case ex =>
       lock.synchronized {
@@ -440,53 +442,29 @@ class Context(
     finalization.future
   }
 
+  /**
+   * Fetch fresh context data and apply it. On a context whose data fetch failed
+   * this is a no-op that succeeds (the failed context is not recovered).
+   */
   def refresh(): Unit = {
-    val newData = sdk.fetchContextDataBlocking()
-    refresh(newData)
+    lock.synchronized(checkReady(expectNotFinalized = true))
+    if (!_failed) {
+      val newData = sdk.fetchContextDataBlocking()
+      refresh(newData)
+    }
   }
 
+  /**
+   * Apply already-fetched context data. Cached assignments are kept; each one
+   * is re-validated against the new experiment data on its next read (see
+   * isAssignmentValid), so an assignment stays sticky while the experiment's
+   * id, unit type, iteration, full-on variant and traffic split are unchanged.
+   */
   def refresh(newData: ContextData): Unit = lock.synchronized {
-    checkReady()
-    checkNotFinalized()
-
-    val oldIndex = _index
-    _init(newData)
-    safeLog("refresh", newData.asJson)
-
-    val toRemove = mutable.ListBuffer[String]()
-    val toReset = mutable.ListBuffer[String]()
-
-    _assignments.foreach { case (name, assignment) =>
-      val oldExp = oldIndex.get(name)
-      val newExp = _index.get(name)
-
-      val shouldClear = (oldExp, newExp) match {
-        case (Some(old), Some(exp)) =>
-          old.id != exp.id ||
-          old.iteration != exp.iteration ||
-          old.fullOnVariant != exp.fullOnVariant ||
-          old.trafficSplit != exp.trafficSplit
-        case (Some(_), None) =>
-          assignment.assigned
-        case (None, Some(_)) =>
-          true
-        case (None, None) =>
-          false
-      }
-
-      val hasOverride = _overrides.contains(name)
-      val hasCustom = _cassignments.contains(name)
-
-      if (shouldClear && !hasOverride && !hasCustom) {
-        toRemove += name
-      }
-    }
-
-    toRemove.foreach(_assignments.remove)
-    toReset.foreach { name =>
-      _assignments.get(name).foreach { a =>
-        _assignments(name) = a.copy(exposed = false)
-      }
+    checkReady(expectNotFinalized = true)
+    if (!_failed) {
+      _init(newData)
+      safeLog("refresh", newData.asJson)
     }
   }
 
@@ -638,6 +616,7 @@ class Context(
       experiment match {
         case Some(exp) =>
           val baseValid = assignment.id == exp.id &&
+            assignment.unitType == exp.unitType &&
             assignment.iteration == exp.iteration &&
             assignment.fullOnVariant == exp.fullOnVariant &&
             assignment.trafficSplit == exp.trafficSplit &&
@@ -654,9 +633,10 @@ class Context(
       case Some(aud) if aud.nonEmpty && aud != "null" && aud != "{}" =>
         if (_attrsSeq > assignment.attrsSeq) {
           val matcher = new AudienceMatcher(getAttributes())
+          // An indeterminate (None) result keeps the cached flag, as in JS.
           val newAudienceMismatch = matcher.evaluate(Some(aud)) match {
             case Some(result) => !result
-            case None => false
+            case None => assignment.audienceMismatch
           }
           newAudienceMismatch == assignment.audienceMismatch
         } else {
@@ -814,7 +794,7 @@ class Context(
       throw new IllegalStateException("ABsmartly Context is finalized.")
     }
     if (_finalizing) {
-      throw new IllegalStateException("ABsmartly Context is finalized.")
+      throw new IllegalStateException("ABsmartly Context is finalizing.")
     }
   }
 }

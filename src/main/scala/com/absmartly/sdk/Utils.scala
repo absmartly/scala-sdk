@@ -14,9 +14,31 @@ object Utils {
    * @return Base64url encoded MD5 hash (no padding)
    */
   def hashUnit(unit: String): String = {
-    val md5Bytes = DigestUtils.md5(unit)
+    val md5Bytes = DigestUtils.md5(utf8Bytes(unit))
     // Convert to base64url (URL-safe, no padding)
     Base64.getUrlEncoder.withoutPadding().encodeToString(md5Bytes)
+  }
+
+  /**
+   * UTF-8 bytes of the Unicode string, as the JS SDK's TextEncoder produces
+   * them: a surrogate pair becomes one 4-byte sequence and a lone surrogate
+   * becomes U+FFFD (EF BF BD). `String.getBytes(UTF_8)` would emit '?' for a
+   * lone surrogate instead.
+   */
+  def utf8Bytes(value: String): Array[Byte] = {
+    val sb = new java.lang.StringBuilder(value.length)
+    var i = 0
+    while (i < value.length) {
+      val c = value.charAt(i)
+      if (Character.isHighSurrogate(c) && i + 1 < value.length && Character.isLowSurrogate(value.charAt(i + 1))) {
+        sb.append(c).append(value.charAt(i + 1))
+        i += 2
+      } else {
+        sb.append(if (Character.isSurrogate(c)) '\uFFFD' else c)
+        i += 1
+      }
+    }
+    sb.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8)
   }
 
   /**
@@ -55,7 +77,9 @@ object Utils {
   }
 
   /**
-   * Convert value to boolean for expression evaluation
+   * Convert value to boolean for expression evaluation (JS `booleanConvert`).
+   * None only for null; strings "false", "0" and "" are false; arrays and
+   * objects are truthy.
    */
   def booleanConvert(value: io.circe.Json): Option[Boolean] = {
     if (value.isNull) {
@@ -63,29 +87,29 @@ object Utils {
     } else if (value.isBoolean) {
       value.asBoolean
     } else if (value.isNumber) {
-      value.asNumber.flatMap(_.toInt).map(_ != 0)
+      value.asNumber.map(_.toDouble != 0.0)
     } else if (value.isString) {
-      value.asString.map(_.nonEmpty)
+      value.asString.map(s => s != "false" && s != "0" && s.nonEmpty)
     } else {
-      // Arrays and objects are truthy
       Some(true)
     }
   }
 
+  // JS parseFloat: the longest leading decimal literal, surrounding text ignored.
+  private val FloatPrefix = """^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)""".r.unanchored
+
   /**
-   * Convert value to number for expression evaluation
+   * Convert value to number for expression evaluation (JS `numberConvert`).
    */
   def numberConvert(value: io.circe.Json): Option[Double] = {
-    if (value.isNull) {
-      None
-    } else if (value.isBoolean) {
+    if (value.isBoolean) {
       value.asBoolean.map(if (_) 1.0 else 0.0)
     } else if (value.isNumber) {
       value.asNumber.map(_.toDouble)
     } else if (value.isString) {
-      value.asString.flatMap { s =>
-        if (s.isEmpty) Some(0.0)
-        else s.toDoubleOption
+      value.asString.flatMap {
+        case FloatPrefix(num) => Some(num.toDouble).filter(d => !d.isInfinite && !d.isNaN)
+        case _ => None
       }
     } else {
       None
@@ -93,63 +117,49 @@ object Utils {
   }
 
   /**
-   * Convert value to string for expression evaluation
+   * Convert value to string for expression evaluation (JS `stringConvert`).
+   * Numbers are rendered with up to 15 fraction digits, trailing zeros
+   * removed; arrays, objects and null have no string form.
    */
   def stringConvert(value: io.circe.Json): Option[String] = {
-    if (value.isNull) {
-      None
-    } else if (value.isBoolean) {
+    if (value.isBoolean) {
       value.asBoolean.map(_.toString)
     } else if (value.isNumber) {
-      value.asNumber.map { n =>
-        n.toInt.map(_.toString).getOrElse(n.toDouble.toString)
-      }
+      value.asNumber.map(n => formatNumber(n.toDouble))
     } else if (value.isString) {
       value.asString
     } else {
-      Some(value.noSpaces)
+      None
     }
   }
 
+  private def formatNumber(d: Double): String = {
+    val fixed = new java.math.BigDecimal(d).setScale(15, java.math.RoundingMode.HALF_UP).toPlainString
+    fixed.replaceFirst("\\.?0{0,15}$", "")
+  }
+
   /**
-   * Compare two JSON values
+   * Compare two JSON values (JS `Evaluator.compare`).
    *
-   * Used by eq, gt, gte, lt, lte operators.
-   * Returns:
-   *   Some(0) if equal
-   *   Some(1) if lhs > rhs
-   *   Some(-1) if lhs < rhs
-   *   None if incomparable (null involved)
+   * The left operand's type drives the conversion of the right one. Arrays
+   * and objects only compare equal (Some(0)) to a deeply equal value.
+   * Returns None when the values are not comparable.
    */
   def compare(lhs: io.circe.Json, rhs: io.circe.Json): Option[Int] = {
-    // If either is null, return None
     if (lhs.isNull || rhs.isNull) {
       return if (lhs.isNull && rhs.isNull) Some(0) else None
     }
 
-    // Try numeric comparison first
-    (numberConvert(lhs), numberConvert(rhs)) match {
-      case (Some(l), Some(r)) =>
-        if (l == r) Some(0)
-        else if (l > r) Some(1)
-        else Some(-1)
-      case _ =>
-        // Fall back to string comparison
-        (stringConvert(lhs), stringConvert(rhs)) match {
-          case (Some(l), Some(r)) =>
-            val cmp = l.compareTo(r)
-            if (cmp == 0) Some(0)
-            else if (cmp > 0) Some(1)
-            else Some(-1)
-          case _ =>
-            // Compare JSON representations
-            val ls = lhs.noSpaces
-            val rs = rhs.noSpaces
-            val cmp = ls.compareTo(rs)
-            if (cmp == 0) Some(0)
-            else if (cmp > 0) Some(1)
-            else Some(-1)
-        }
+    if (lhs.isNumber) {
+      for (l <- numberConvert(lhs); r <- numberConvert(rhs)) yield (if (l == r) 0 else if (l > r) 1 else -1)
+    } else if (lhs.isString) {
+      for (l <- lhs.asString; r <- stringConvert(rhs)) yield Integer.signum(l.compareTo(r))
+    } else if (lhs.isBoolean) {
+      for (l <- lhs.asBoolean; r <- booleanConvert(rhs)) yield Integer.signum(java.lang.Boolean.compare(l, r))
+    } else if (lhs == rhs) {
+      Some(0)
+    } else {
+      None
     }
   }
 }
