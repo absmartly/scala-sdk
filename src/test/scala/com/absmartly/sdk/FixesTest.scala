@@ -960,4 +960,13 @@ class FixesTest extends AnyFunSuite {
     assert(published("user_id") == Utils.hashUnit("42"))
     assert(published("session_id") == Utils.hashUnit("abc"))
   }
+
+  test("a failed refresh fetch logs an error event and rethrows") {
+    val logger = new RecordingLogger
+    val failing = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
+    val context = failing.createContextWith(testUnits, testData)
+    intercept[Exception](context.refresh())
+    assert(logger.types == List("ready", "error"))
+    assert(!context.isFailed())
+  }
 }
