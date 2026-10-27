@@ -667,12 +667,13 @@ class ContextTest extends AnyFunSuite {
     assert(context.peek("unknown_exp") == 1)
   }
 
-  test("setCustomAssignment throws after finalized") {
+  test("custom assignments remain allowed after finalized") {
     val context = createContext()
     scala.concurrent.Await.result(context.finalizeContext(), scala.concurrent.duration.DurationInt(5).seconds)
-    assertThrows[IllegalStateException] {
-      context.setCustomAssignment("exp_test_ab", 1)
-    }
+    context.setCustomAssignment("exp_test_ab", 1)
+    context.setCustomAssignments(Map("exp_test_ab" -> 0, "exp_test_abc" -> 1))
+    assert(context.isFinalized())
+    assertThrows[IllegalStateException](context.treatment("exp_test_ab"))
   }
 
   test("setUnit throws after finalized") {
@@ -691,7 +692,6 @@ class ContextTest extends AnyFunSuite {
     }
   }
 
-  // D1: reads reject unavailable contexts instead of returning defaults.
   for ((state, message) <- List(
     "not ready" -> "ABsmartly Context is not yet ready.",
     "finalized" -> "ABsmartly Context is finalized."
