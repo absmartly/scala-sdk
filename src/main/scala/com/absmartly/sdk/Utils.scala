@@ -16,8 +16,21 @@ object Utils {
   def hashUnit(unit: String): String = {
     val md5Bytes = DigestUtils.md5(utf8Bytes(unit))
     // Convert to base64url (URL-safe, no padding)
-    Base64.getUrlEncoder.withoutPadding().encodeToString(md5Bytes)
+    base64UrlNoPadding(md5Bytes)
   }
+
+  /**
+   * Hash a numeric unit the way the JS SDK does: the number is first rounded
+   * to an integer (`toFixed(0)`, halves away from zero), so 125.75 hashes as "126".
+   */
+  def hashUnit(unit: Double): String = {
+    val rounded = new java.math.BigDecimal(unit).setScale(0, java.math.RoundingMode.HALF_UP).toPlainString
+    hashUnit(if (unit < 0 && rounded == "0") "-0" else rounded)
+  }
+
+  /** Base64url encoding without padding, as used for unit hashes. */
+  def base64UrlNoPadding(bytes: Array[Byte]): String =
+    Base64.getUrlEncoder.withoutPadding().encodeToString(bytes)
 
   /**
    * UTF-8 bytes of the Unicode string, as the JS SDK's TextEncoder produces
@@ -40,6 +53,15 @@ object Utils {
     }
     sb.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8)
   }
+
+  /** JS `isNumeric`: true only for a JSON number. */
+  def isNumeric(value: io.circe.Json): Boolean = value.isNumber
+
+  /** JS `isObject`: true only for a plain JSON object (not an array). */
+  def isObject(value: io.circe.Json): Boolean = value.isObject
+
+  /** JS `isPromise`: true for an asynchronous value (a Future). Decoded JSON is never one. */
+  def isPromise(value: Any): Boolean = value.isInstanceOf[scala.concurrent.Future[_]]
 
   /**
    * Choose a variant index based on split probabilities

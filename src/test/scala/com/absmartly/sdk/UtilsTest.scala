@@ -191,4 +191,12 @@ class UtilsTest extends AnyFunSuite {
   test("compare arrays returns Some(0) for equal arrays") {
     assert(Utils.compare(Json.arr(), Json.arr()) == Some(0))
   }
+
+  test("type checks and base64 helpers follow the JS SDK") {
+    import io.circe.Json
+    assert(Utils.isObject(Json.obj()) && !Utils.isObject(Json.arr()) && !Utils.isObject(Json.fromString("s")))
+    assert(Utils.isNumeric(Json.fromInt(1)) && !Utils.isNumeric(Json.fromString("1")) && !Utils.isNumeric(Json.True))
+    assert(Utils.isPromise(scala.concurrent.Future.successful(1)) && !Utils.isPromise(Json.obj()))
+    assert(Utils.base64UrlNoPadding("t".getBytes("UTF-8")) == "dA")
+  }
 }

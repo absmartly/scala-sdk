@@ -876,4 +876,62 @@ class FixesTest extends AnyFunSuite {
     }
     assert(ex.getMessage.contains("UID already set."))
   }
+
+  // ======================
+  // Failed loads, publish errors and typed units
+  // ======================
+
+  final class RecordingLogger extends EventLogger {
+    val events = scala.collection.mutable.ListBuffer[(String, Json)]()
+    def logEvent(eventType: String, data: Json): Unit = synchronized { events += (eventType -> data); () }
+    def types: List[String] = synchronized(events.map(_._1).toList)
+  }
+
+  test("setDataFailed leaves the context ready and failed with empty data and logs an error event") {
+    val logger = new RecordingLogger
+    val context = new Context(sdk, None, testUnits, ContextOptions(), logger)
+    context.setDataFailed(Some(new RuntimeException("boom")))
+    assert(context.isReady() && context.isFailed())
+    assert(context.ready().isCompleted)
+    assert(logger.types == List("error"))
+    assert(logger.events.head._2.hcursor.downField("message").as[String] == Right("boom"))
+    assert(context.treatment("exp_test_ab") == 0)
+    assert(context.experiments().isEmpty)
+  }
+
+  test("createContext yields a ready, failed context when the fetch fails") {
+    val logger = new RecordingLogger
+    val failing = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
+    val context = Await.result(failing.createContext(testUnits), 10.seconds)
+    assert(context.isReady() && context.isFailed())
+    assert(context.readyError().isDefined)
+    assert(logger.types == List("error"))
+  }
+
+  test("a failed publish logs an error event and keeps the events queued") {
+    val logger = new RecordingLogger
+    val failingPublisher = new ContextPublisher {
+      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]]): Future[Unit] =
+        Future.failed(new RuntimeException("Publish failed"))
+    }
+    val psdk = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", eventLogger = logger, publisher = Some(failingPublisher)))
+    val context = psdk.createContextWith(testUnits, testData)
+    context.track("goal")
+    intercept[RuntimeException](Await.result(context.publish(), 5.seconds))
+    assert(logger.types == List("ready", "goal", "error"))
+    assert(context.pending() == 1)
+  }
+
+  test("numeric units keep their type and hash like the JS SDK") {
+    val context = createContext(units = Map("session_id" -> "abc"))
+    context.setUnit("user_id", 125L)
+    context.setUnit("float_id", 125.75)
+    assert(context.getUnitValue("user_id").contains(Json.fromLong(125)))
+    assert(context.getUnitValue("float_id").contains(Json.fromDoubleOrNull(125.75)))
+    assert(context.getUnitValue("session_id").contains(Json.fromString("abc")))
+    assert(Utils.hashUnit(125.75) == Utils.hashUnit("126"))
+    assert(Utils.hashUnit(125.0) == Utils.hashUnit("125"))
+    context.setUnit("user_id", 125L)
+    assert(intercept[IllegalStateException](context.setUnit("user_id", "125")).getMessage == "Unit 'user_id' UID already set.")
+  }
 }

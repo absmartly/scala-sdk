@@ -39,7 +39,10 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
    *
    * @param units Initial units (e.g., Map("session_id" -> "abc123"))
    * @param options Optional configuration
-   * @return Future containing the Context
+   * @return Future containing the Context. If the data fetch fails, the
+   *         Future still succeeds with a context that is ready and failed
+   *         (isFailed(), readyError()), has no experiments, and has logged an
+   *         "error" event, as in the JS SDK.
    */
   def createContext(
     units: Map[String, String],
@@ -48,6 +51,10 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
     fetchContextDataAsync().map { data =>
       logger.debug(s"Context created with ${data.experiments.length} experiments")
       new Context(this, data, units, options, config.eventLogger)
+    }.recover { case NonFatal(e) =>
+      val context = new Context(this, None, units, options, config.eventLogger)
+      context.setDataFailed(Some(e))
+      context
     }
   }
 

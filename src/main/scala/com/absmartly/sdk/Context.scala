@@ -31,11 +31,14 @@ class Context(
   private val _inflight = mutable.Set[Future[Unit]]()
   @volatile private var _finalized: Boolean = false
   @volatile private var _finalizing: Boolean = false
+  private val _readyPromise = scala.concurrent.Promise[Unit]()
 
   // Data
   private var _data: ContextData = initialData.getOrElse(ContextData(experiments = List.empty))
   // Units passed as method arguments take precedence over ContextOptions.units
   private val _units: mutable.Map[String, String] = mutable.Map((options.units ++ initialUnits).toSeq: _*)
+  // The units as they were set (string or number); _units holds their text form.
+  private val _unitValues: mutable.Map[String, Json] = _units.map { case (k, v) => k -> Json.fromString(v) }
   private val _attributes: mutable.ListBuffer[Attribute] = {
     val now = System.currentTimeMillis()
     mutable.ListBuffer(options.attributes.toSeq.map { case (name, value) => Attribute(name, value, now) }: _*)
@@ -64,6 +67,7 @@ class Context(
   initialData.foreach { data =>
     _init(data)
     safeLog("ready", _data.asJson)
+    _readyPromise.trySuccess(())
   }
 
   // ======================
@@ -75,16 +79,31 @@ class Context(
   def isFinalized(): Boolean = _finalized
   def isFinalizing(): Boolean = _finalizing
 
+  /**
+   * Completes once the context is ready, whether its data loaded or failed to
+   * load (check isFailed()/readyError() for the latter). Never fails.
+   */
+  def ready(): Future[Unit] = _readyPromise.future
+
   def setData(data: ContextData): Unit = lock.synchronized {
     _init(data)
     _ready = true
     safeLog("ready", _data.asJson)
+    _readyPromise.trySuccess(())
   }
 
+  /**
+   * Marks the initial data load as failed. Like the JS SDK, the context becomes
+   * ready with empty data (reads return control/defaults) and an "error" event
+   * is logged.
+   */
   def setDataFailed(error: Option[Throwable] = None): Unit = lock.synchronized {
+    _init(ContextData(experiments = List.empty))
     _failed = true
     _failedError = error
     _ready = true
+    safeLog("error", Context.errorJson(error.getOrElse(new IllegalStateException("ABsmartly Context failed to load."))))
+    _readyPromise.trySuccess(())
   }
 
   def readyError(): Option[Throwable] = _failedError
@@ -109,14 +128,32 @@ class Context(
 
   def setUnit(unitType: String, uid: String): Unit = lock.synchronized {
     checkNotFinalized()
-    require(unitType.trim.nonEmpty, "Unit type must not be blank")
     require(uid.trim.nonEmpty, s"Unit '$unitType' UID must not be blank.")
+    _setUnit(unitType, Json.fromString(uid), uid)
+  }
 
-    _units.get(unitType) match {
-      case Some(existing) if existing != uid =>
+  /** Sets a numeric unit. It is hashed like the JS SDK does (rounded to an integer). */
+  def setUnit(unitType: String, uid: Long): Unit = lock.synchronized {
+    checkNotFinalized()
+    _setUnit(unitType, Json.fromLong(uid), uid.toString)
+  }
+
+  def setUnit(unitType: String, uid: Double): Unit = lock.synchronized {
+    checkNotFinalized()
+    require(!uid.isNaN && !uid.isInfinite, s"Unit '$unitType' UID must be a finite number.")
+    _setUnit(unitType, Json.fromDoubleOrNull(uid), Json.fromDoubleOrNull(uid).noSpaces)
+  }
+
+  private def _setUnit(unitType: String, value: Json, text: String): Unit = {
+    require(unitType.trim.nonEmpty, "Unit type must not be blank")
+
+    _unitValues.get(unitType) match {
+      case Some(existing) if existing != value =>
         throw new IllegalStateException(s"Unit '$unitType' UID already set.")
       case _ =>
-        _units(unitType) = uid
+        _units(unitType) = text
+        _unitValues(unitType) = value
+        val uid = text
         // Invalidate assigner cache for this unit type
         _assigners.remove(unitType)
         val maskedUid = if (uid.length > 4) s"***${uid.takeRight(4)}" else "***"
@@ -134,6 +171,15 @@ class Context(
 
   def getUnits(): Map[String, String] = lock.synchronized {
     _units.toMap
+  }
+
+  /** The unit as it was set: a JSON string, or a JSON number for a numeric unit. */
+  def getUnitValue(unitType: String): Option[Json] = lock.synchronized {
+    _unitValues.get(unitType)
+  }
+
+  def getUnitValues(): Map[String, Json] = lock.synchronized {
+    _unitValues.toMap
   }
 
   // ======================
@@ -368,6 +414,7 @@ class Context(
               _goals.prependAll(goals)
             }
             logger.error(s"Publish failed: ${ex.getMessage}", ex)
+            safeLog("error", Context.errorJson(ex))
           case _ =>
             // Like the JS SDK, the "publish" event reports a delivered batch only.
             safeLog("publish", publishEventJson)
@@ -449,7 +496,13 @@ class Context(
   def refresh(): Unit = {
     lock.synchronized(checkReady(expectNotFinalized = true))
     if (!_failed) {
-      val newData = sdk.fetchContextDataBlocking()
+      val newData =
+        try sdk.fetchContextDataBlocking()
+        catch {
+          case scala.util.control.NonFatal(e) =>
+            safeLog("error", Context.errorJson(e))
+            throw e
+        }
       refresh(newData)
     }
   }
@@ -702,12 +755,7 @@ class Context(
 
   private def getOrCreateAssigner(unitType: String): VariantAssigner = {
     _assigners.getOrElseUpdate(unitType, {
-      _units.get(unitType) match {
-        case Some(uid) =>
-          new VariantAssigner(Utils.hashUnit(uid))
-        case None =>
-          new VariantAssigner(Utils.hashUnit(""))
-      }
+      new VariantAssigner(_unitHash(unitType))
     })
   }
 
@@ -775,10 +823,14 @@ class Context(
   }
 
   private def _getHashedUnits(): Map[String, String] = {
-    _units.map { case (unitType, uid) =>
-      unitType -> Utils.hashUnit(uid)
-    }.toMap
+    _units.keys.map(unitType => unitType -> _unitHash(unitType)).toMap
   }
+
+  private def _unitHash(unitType: String): String =
+    _unitValues.get(unitType) match {
+      case Some(value) => value.asNumber.map(n => Utils.hashUnit(n.toDouble)).getOrElse(Utils.hashUnit(value.asString.getOrElse("")))
+      case None => Utils.hashUnit("")
+    }
 
   private def checkReady(expectNotFinalized: Boolean = false): Unit = {
     if (!_ready) {
@@ -797,4 +849,9 @@ class Context(
       throw new IllegalStateException("ABsmartly Context is finalizing.")
     }
   }
+}
+
+object Context {
+  private[sdk] def errorJson(error: Throwable): Json =
+    Json.obj("message" -> Option(error.getMessage).map(Json.fromString).getOrElse(Json.Null))
 }

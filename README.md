@@ -329,7 +329,7 @@ class CustomEventLogger extends EventLogger {
         println("Context refreshed")
       case "publish" =>
         println("Events published")
-      case "close" =>
+      case "finalize" =>
         println("Context finalized")
       case _ =>
         println(s"Unknown event: $eventType")
@@ -354,13 +354,13 @@ val sdk = SDK.create(
 
 | Event      | When                                         | Data                                 |
 |------------|----------------------------------------------|--------------------------------------|
-| `error`    | Context receives an error                    | Error details in JSON                |
+| `error`    | Data load, refresh or publish fails          | `{"message": ...}`                   |
 | `ready`    | Context turns ready                          | ContextData used to initialize       |
 | `refresh`  | `refresh()` method succeeds                  | ContextData used to refresh          |
 | `publish`  | `publish()` method succeeds                  | PublishEvent sent to collector       |
 | `exposure` | `treatment()` succeeds on first exposure     | Exposure enqueued for publishing     |
 | `goal`     | `track()` method succeeds                    | Goal enqueued for publishing         |
-| `close`    | `finalizeContext()` succeeds the first time  | Empty object                         |
+| `finalize` | `finalizeContext()` succeeds the first time  | null                                 |
 
 ## Platform-Specific Examples
 
