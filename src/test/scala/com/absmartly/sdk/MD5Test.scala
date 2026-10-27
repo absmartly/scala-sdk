@@ -21,6 +21,21 @@ class MD5Test extends AnyFunSuite {
     ("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.", "24m7XOq4f5wPzCqzbBicLA")
   )
 
+  // Characters outside the BMP are stored as UTF-16 surrogate pairs and must encode to 4-byte UTF-8; these canonical hashes are shared across all SDKs.
+  val astralTestCases: List[(String, String)] = List(
+    ("😀", "KgLqw51xanDs83V5GFkntg"),
+    ("😀😁", "ZJuDalvUWRJnVtkspj-2bQ"),
+    ("世界你好", "v2CJG7YcjjWncKOSCzF2GA"),
+    ("user_世界_123", "SCgk4OzXlFMvo1UMsP88fA")
+  )
+
+  astralTestCases.zipWithIndex.foreach { case ((input, expected), idx) =>
+    test(s"hashUnit astral/multibyte test case $idx: '$input' produces correct base64url MD5") {
+      val result = Utils.hashUnit(input)
+      assert(result == expected, s"Input: '$input', expected: $expected, got: $result")
+    }
+  }
+
   testCases.zipWithIndex.foreach { case ((input, expected), idx) =>
     test(s"hashUnit test case $idx: '${input.take(40)}' produces correct base64url MD5") {
       val result = Utils.hashUnit(input)

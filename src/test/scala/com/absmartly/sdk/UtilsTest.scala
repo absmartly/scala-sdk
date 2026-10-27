@@ -102,8 +102,8 @@ class UtilsTest extends AnyFunSuite {
     assert(Utils.numberConvert(Json.fromDouble(1.5).get) == Some(1.5))
   }
 
-  test("numberConvert empty string returns Some(0.0)") {
-    assert(Utils.numberConvert(Json.fromString("")) == Some(0.0))
+  test("numberConvert empty string returns None like parseFloat") {
+    assert(Utils.numberConvert(Json.fromString("")) == None)
   }
 
   test("numberConvert '123' returns Some(123.0)") {
@@ -190,5 +190,13 @@ class UtilsTest extends AnyFunSuite {
 
   test("compare arrays returns Some(0) for equal arrays") {
     assert(Utils.compare(Json.arr(), Json.arr()) == Some(0))
+  }
+
+  test("type checks and base64 helpers follow the JS SDK") {
+    import io.circe.Json
+    assert(Utils.isObject(Json.obj()) && !Utils.isObject(Json.arr()) && !Utils.isObject(Json.fromString("s")))
+    assert(Utils.isNumeric(Json.fromInt(1)) && !Utils.isNumeric(Json.fromString("1")) && !Utils.isNumeric(Json.True))
+    assert(Utils.isPromise(scala.concurrent.Future.successful(1)) && !Utils.isPromise(Json.obj()))
+    assert(Utils.base64UrlNoPadding("t".getBytes("UTF-8")) == "dA")
   }
 }

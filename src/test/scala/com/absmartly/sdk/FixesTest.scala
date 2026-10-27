@@ -1,0 +1,972 @@
+package com.absmartly.sdk
+
+import org.scalatest.funsuite.AnyFunSuite
+import io.circe.Json
+import io.circe.parser._
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration._
+
+class FixesTest extends AnyFunSuite {
+
+  implicit val ec: ExecutionContext = ExecutionContext.global
+
+  val config: SDKConfig = SDKConfig(
+    endpoint = "https://test.absmartly.io/v1",
+    apiKey = "test-api-key-12345",
+    application = "test-app",
+    environment = "test"
+  )
+
+  val sdk = new SDK(config)
+
+  val expTestAb: ExperimentData = ExperimentData(
+    id = 1,
+    name = "exp_test_ab",
+    unitType = "session_id",
+    iteration = 1,
+    seedHi = 3603515,
+    seedLo = 233373850,
+    split = List(0.5, 0.5),
+    trafficSeedHi = 449867249,
+    trafficSeedLo = 455443629,
+    trafficSplit = List(0.0, 1.0),
+    fullOnVariant = 0,
+    applications = List(ExperimentApplication("website")),
+    variants = List(
+      ExperimentVariant("A", None),
+      ExperimentVariant("B", parse("""{"banner.border":1,"banner.size":"large"}""").toOption)
+    ),
+    audienceStrict = false,
+    audience = None
+  )
+
+  val testUnits: Map[String, String] = Map(
+    "session_id" -> "e791e240fcd3df7d238cfc285f475e8152fcc0ec",
+    "user_id" -> "123456789"
+  )
+
+  val testData: ContextData = ContextData(experiments = List(expTestAb))
+
+  def createContext(
+    units: Map[String, String] = testUnits,
+    data: ContextData = testData,
+    options: ContextOptions = ContextOptions()
+  ): Context = {
+    sdk.createContextWith(units, data, options)
+  }
+
+  // ======================
+  // Fix #1/#13/#14: _flush() actually publishes and clears only on success
+  // ======================
+
+  test("fix1/13/14: _flush builds PublishEvent and calls sdk.publish") {
+    var publishCalled = false
+    var publishedUnits: Map[String, String] = Map.empty
+    var publishedExposures: List[Exposure] = List.empty
+    var publishedGoals: List[Goal] = List.empty
+    var publishedHashed: Boolean = false
+    var publishedAttributes: Option[List[Attribute]] = None
+
+    val mockSdk = new SDK(config) {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = {
+        publishCalled = true
+        publishedUnits = units
+        publishedHashed = hashed
+        publishedExposures = exposures
+        publishedGoals = goals
+        publishedAttributes = attributes
+        Future.successful(())
+      }
+    }
+
+    val context = new Context(mockSdk, Some(testData), testUnits, ContextOptions(), NoOpEventLogger)
+    context.treatment("exp_test_ab")
+    context.track("purchase", Some(Map("amount" -> Json.fromDouble(99.99).get)))
+
+    assert(context.pending() == 2)
+
+    val result = context.publish()
+    Await.result(result, 5.seconds)
+
+    assert(publishCalled)
+    assert(publishedHashed)
+    assert(publishedExposures.length == 1)
+    assert(publishedExposures.head.name == "exp_test_ab")
+    assert(publishedGoals.length == 1)
+    assert(publishedGoals.head.name == "purchase")
+    assert(publishedUnits.nonEmpty)
+    assert(context.pending() == 0)
+  }
+
+  test("fix14: queues not cleared when publish fails") {
+    val failingSdk = new SDK(config) {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = {
+        Future.failed(new RuntimeException("Network error"))
+      }
+    }
+
+    val context = new Context(failingSdk, Some(testData), testUnits, ContextOptions(), NoOpEventLogger)
+    context.treatment("exp_test_ab")
+    context.track("purchase")
+
+    assert(context.pending() == 2)
+
+    val result = context.publish()
+    try {
+      Await.result(result, 5.seconds)
+      fail("Should have thrown")
+    } catch {
+      case _: RuntimeException => ()
+    }
+
+    assert(context.pending() == 2)
+  }
+
+  test("fix1: _flush with no events does not call publish") {
+    var publishCalled = false
+    val mockSdk = new SDK(config) {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = {
+        publishCalled = true
+        Future.successful(())
+      }
+    }
+
+    val context = new Context(mockSdk, Some(testData), testUnits, ContextOptions(), NoOpEventLogger)
+    val result = context.publish()
+    Await.result(result, 5.seconds)
+    assert(!publishCalled)
+  }
+
+  test("fix13/24: publish includes attributes when set") {
+    var publishedAttributes: Option[List[Attribute]] = None
+
+    val mockSdk = new SDK(config) {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = {
+        publishedAttributes = attributes
+        Future.successful(())
+      }
+    }
+
+    val context = new Context(mockSdk, Some(testData), testUnits, ContextOptions(), NoOpEventLogger)
+    context.setAttribute("age", Json.fromInt(25))
+    context.treatment("exp_test_ab")
+
+    val result = context.publish()
+    Await.result(result, 5.seconds)
+
+    assert(publishedAttributes.isDefined)
+    assert(publishedAttributes.get.exists(_.name == "age"))
+  }
+
+  // ======================
+  // Fix #2: ReDoS thread leak
+  // ======================
+
+  test("fix2: regex match with normal pattern works") {
+    val expr = parse("""{"match": [{"value": "hello123"}, {"value": "\\d+"}]}""").toOption.get
+    val result = com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty)
+    assert(result.asBoolean.contains(true))
+  }
+
+  test("fix2: regex match with long input is rejected") {
+    val longInput = "a" * 30000
+    val expr = parse(s"""{"match": [{"value": "$longInput"}, {"value": "a+"}]}""").toOption.get
+    val result = com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty)
+    assert(result.asBoolean.contains(false))
+  }
+
+  test("fix2: regex match with long pattern is rejected") {
+    val longPattern = "a" * 600
+    val expr = parse(s"""{"match": [{"value": "$longPattern"}, {"value": "$longPattern"}]}""").toOption.get
+    val result = com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty)
+    assert(result.asBoolean.contains(false))
+  }
+
+  // ======================
+  // Fix #3: Logger @volatile
+  // ======================
+
+  test("fix3: Logger instance is visible across threads") {
+    val previousLogger = Logger.get
+    val customLogger = new NoOpLogger()
+    Logger.setLogger(customLogger)
+
+    try {
+      @volatile var seenLogger: Logger = null
+
+      val thread = new Thread(() => {
+        seenLogger = Logger.get
+      })
+      thread.start()
+      thread.join(1000)
+
+      assert(seenLogger eq customLogger)
+    } finally {
+      Logger.setLogger(previousLogger)
+    }
+  }
+
+  // ======================
+  // Fix #4: @volatile state flags
+  // ======================
+
+  test("fix4: state flags visible across threads") {
+    val context = createContext()
+    assert(context.isReady())
+
+    @volatile var readyFromThread = false
+    val thread = new Thread(() => {
+      readyFromThread = context.isReady()
+    })
+    thread.start()
+    thread.join(1000)
+    assert(readyFromThread)
+  }
+
+  // ======================
+  // Fix #5: pending() synchronized
+  // ======================
+
+  test("fix5: pending returns consistent count under concurrent access") {
+    val context = createContext()
+    context.treatment("exp_test_ab")
+
+    val futures = (1 to 100).map { _ =>
+      Future { context.pending() }
+    }
+    val results = Await.result(Future.sequence(futures), 5.seconds)
+    assert(results.forall(_ == 1))
+  }
+
+  // ======================
+  // Fix #6/#19: variableValue/peekVariableValue synchronized
+  // ======================
+
+  test("fix6: variableValue is thread-safe") {
+    val context = createContext()
+    context.setOverride("exp_test_ab", 1)
+
+    val futures = (1 to 50).map { _ =>
+      Future { context.variableValue("banner.border", "default") }
+    }
+    val results = Await.result(Future.sequence(futures), 5.seconds)
+    assert(results.forall(_ == "1"))
+  }
+
+  test("fix6: peekVariableValue is thread-safe") {
+    val context = createContext()
+    context.setOverride("exp_test_ab", 1)
+
+    val futures = (1 to 50).map { _ =>
+      Future { context.peekVariableValue("banner.border", "default") }
+    }
+    val results = Await.result(Future.sequence(futures), 5.seconds)
+    assert(results.forall(_ == "1"))
+  }
+
+  test("finalizeContext propagates publish failure and keeps events retryable") {
+    var fail = true
+    val failingPublisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] =
+        if (fail) Future.failed(new RuntimeException("boom")) else Future.successful(())
+    }
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      publisher = Some(failingPublisher)
+    ))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+
+    val ex = intercept[RuntimeException] { Await.result(context.finalizeContext(), 5.seconds) }
+    assert(ex.getMessage == "boom")
+    assert(!context.isFinalized())
+    assert(context.pending() == 1)
+
+    fail = false
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(context.isFinalized())
+  }
+
+  test("finalizeContext waits for an outstanding publish and surfaces its failure") {
+    val promise = scala.concurrent.Promise[Unit]()
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = promise.future
+    }
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      publisher = Some(publisher)
+    ))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+    val pub = context.publish()
+    val closing = context.finalizeContext()
+    assert(!closing.isCompleted)
+    promise.failure(new RuntimeException("late failure"))
+    intercept[RuntimeException] { Await.result(pub, 5.seconds) }
+    intercept[RuntimeException] { Await.result(closing, 5.seconds) }
+    assert(!context.isFinalized())
+    assert(context.pending() == 1)
+  }
+
+  test("synchronous publisher failure keeps the batch and clears finalizing state") {
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = throw new IllegalStateException("sync boom")
+    }
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      publisher = Some(publisher)
+    ))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+    intercept[IllegalStateException] { Await.result(context.finalizeContext(), 5.seconds) }
+    assert(context.pending() == 1)
+    assert(!context.isFinalizing())
+    assert(!context.isFinalized())
+  }
+
+  test("throwing publish event logger does not lose the batch") {
+    val badLogger = new EventLogger {
+      override def logEvent(eventType: String, data: Json): Unit =
+        if (eventType == "publish") throw new RuntimeException("sink down")
+    }
+    var published = 0
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = { published += 1; Future.successful(()) }
+    }
+    val pubSdk = new SDK(SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      eventLogger = badLogger,
+      publisher = Some(publisher)
+    ))
+    val context = pubSdk.createContextWith(testUnits, testData)
+    context.track("goal1")
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(published == 1)
+    assert(context.isFinalized())
+  }
+
+  test("event logger failures do not break finalization") {
+    val badLogger = new EventLogger {
+      override def logEvent(eventType: String, data: Json): Unit = throw new RuntimeException("sink down")
+    }
+    val cfg = SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "test-api-key-12345",
+      application = "test-app",
+      environment = "test",
+      eventLogger = badLogger
+    )
+    val context = new SDK(cfg).createContextWith(testUnits, testData)
+    assert(context.isReady())
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(context.isFinalized())
+  }
+
+  test("catastrophic regex is aborted on the calling thread without leaking workers") {
+    val before = Thread.getAllStackTraces.keySet.size
+    val expr = parse("""{"match":[{"value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"},{"value":"(a+)+$"}]}""").toOption.get
+    (1 to 5).foreach(_ => assert(com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty) == Json.False))
+    assert(Thread.getAllStackTraces.keySet.size <= before + 1)
+  }
+
+  test("successful finalize emits finalize exactly once through both aliases") {
+    List(false, true).foreach { useClose =>
+      val events = scala.collection.mutable.ListBuffer[String]()
+      val sink = new EventLogger {
+        override def logEvent(eventType: String, data: Json): Unit = events += eventType
+      }
+      val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", eventLogger = sink)
+      val context = new SDK(cfg).createContextWith(testUnits, testData)
+      Await.result(if (useClose) context.close() else context.finalizeContext(), 5.seconds)
+      Await.result(context.finalizeContext(), 5.seconds)
+      assert(events.count(_ == "finalize") == 1)
+      assert(!events.contains("close"))
+    }
+  }
+
+  test("throwing configured Logger does not change operation outcomes") {
+    val previous = Logger.get
+    val throwing = new Logger {
+      override def debug(message: => String): Unit = throw new RuntimeException("log down")
+      override def info(message: => String): Unit = throw new RuntimeException("log down")
+      override def warn(message: => String): Unit = throw new RuntimeException("log down")
+      override def error(message: => String): Unit = throw new RuntimeException("log down")
+      override def error(message: => String, throwable: Throwable): Unit = throw new RuntimeException("log down")
+    }
+    try {
+      Logger.setLogger(throwing)
+      val context = createContext()
+      context.setUnit("extra_unit", "abc")
+      assert(context.getUnit("extra_unit").contains("abc"))
+      Await.result(context.finalizeContext(), 5.seconds)
+      assert(context.isFinalized())
+    } finally {
+      Logger.setLogger(previous)
+    }
+  }
+
+  test("Logger.sanitize bounds length and strips control characters") {
+    val out = Logger.sanitize("a\nb\u0007" + ("x" * 1000), 50)
+    assert(!out.exists(Character.isISOControl))
+    assert(out.length < 120)
+  }
+
+  test("concurrent finalize callers share the same result") {
+    val promise = scala.concurrent.Promise[Unit]()
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = promise.future
+    }
+    val cfg = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", publisher = Some(publisher))
+    val context = new SDK(cfg).createContextWith(testUnits, testData)
+    context.treatment("exp_test_ab")
+    val first = context.finalizeContext()
+    val second = context.finalizeContext()
+    assert(!second.isCompleted)
+    promise.failure(new RuntimeException("late"))
+    intercept[RuntimeException] { Await.result(first, 5.seconds) }
+    intercept[RuntimeException] { Await.result(second, 5.seconds) }
+    assert(!context.isFinalized())
+  }
+
+  test("ContextOptions units and attributes are applied, method arguments win for units") {
+    val opts = ContextOptions(
+      units = Map("user_id" -> "from_options", "extra" -> "e1"),
+      attributes = Map("plan" -> Json.fromString("pro"))
+    )
+    val context = sdk.createContextWith(Map("user_id" -> "from_args"), testData, opts)
+    assert(context.getUnit("user_id").contains("from_args"))
+    assert(context.getUnit("extra").contains("e1"))
+    assert(context.getAttribute("plan").contains(Json.fromString("pro")))
+  }
+
+  private def promisePublisher(promises: scala.collection.mutable.Queue[scala.concurrent.Promise[Unit]]): ContextPublisher =
+    new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = {
+        val p = scala.concurrent.Promise[Unit]()
+        promises.synchronized { promises.enqueue(p) }
+        p.future
+      }
+    }
+
+  private def contextWith(publisher: ContextPublisher): Context =
+    new SDK(SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "test-app", "test", publisher = Some(publisher)))
+      .createContextWith(testUnits, testData)
+
+  test("publish while finalization is in progress is rejected") {
+    val promises = scala.collection.mutable.Queue[scala.concurrent.Promise[Unit]]()
+    val context = contextWith(promisePublisher(promises))
+    context.treatment("exp_test_ab")
+    val closing = context.finalizeContext()
+    assert(context.isFinalizing())
+    assert(!closing.isCompleted)
+    intercept[IllegalStateException] { context.publish() }
+    promises.dequeue().success(())
+    Await.result(closing, 5.seconds)
+    assert(context.isFinalized())
+  }
+
+  test("finalize accounts for an earlier batch that fails while close flushes a later batch") {
+    val pa = scala.concurrent.Promise[Unit]()
+    var calls = 0
+    var firstPublish: Future[Unit] = null
+    val publisher = new ContextPublisher {
+      override def publish(
+        units: Map[String, String],
+        hashed: Boolean,
+        exposures: List[Exposure],
+        goals: List[Goal],
+        attributes: Option[List[Attribute]]
+      ): Future[Unit] = {
+        calls += 1
+        if (calls == 1) pa.future
+        else {
+          pa.failure(new RuntimeException("A failed"))
+          intercept[RuntimeException] { Await.result(firstPublish, 5.seconds) }
+          Future.successful(())
+        }
+      }
+    }
+    val context = contextWith(publisher)
+    context.treatment("exp_test_ab")
+    firstPublish = context.publish()
+    context.track("goal1")
+    val closing = context.finalizeContext()
+    intercept[RuntimeException] { Await.result(closing, 5.seconds) }
+    assert(!context.isFinalized())
+    assert(context.pending() == 1)
+  }
+
+  // ======================
+  // Fix #7: API key masking
+  // ======================
+
+  test("fix7: SDKConfig toString masks API key showing only last 4 chars") {
+    val cfg = SDKConfig(
+      endpoint = "https://test.absmartly.io/v1",
+      apiKey = "my-secret-api-key-12345",
+      application = "test-app",
+      environment = "test"
+    )
+    val str = cfg.toString
+    assert(!str.contains("my-secret-api-key-12345"))
+    assert(str.contains("***2345"))
+  }
+
+  // ======================
+  // Fix #8: setOverride doesn't remove assigners
+  // ======================
+
+  test("fix8: setOverride does not invalidate assigner cache for other experiments") {
+    val context = createContext()
+    val v1 = context.peek("exp_test_ab")
+    context.setOverride("exp_test_ab", 0)
+    assert(context.peek("exp_test_ab") == 0)
+  }
+
+  // ======================
+  // Fix #11/#22: Matcher uses NonFatal instead of catching VirtualMachineErrors
+  // ======================
+
+  test("fix11: AudienceMatcher catches non-fatal exceptions gracefully") {
+    val matcher = new AudienceMatcher(Map.empty)
+    val result = matcher.evaluate(Some("invalid json {{{"))
+    assert(result == None)
+  }
+
+  // ======================
+  // Fix #12: customFieldValue safe boolean parsing
+  // ======================
+
+  test("fix12: customFieldValue handles valid boolean") {
+    val exp = expTestAb.copy(
+      customFieldValues = Some(List(CustomFieldValue("flag", "true", "boolean")))
+    )
+    val data = ContextData(experiments = List(exp))
+    val context = createContext(data = data)
+    val result = context.customFieldValue("exp_test_ab", "flag")
+    assert(result.contains(Json.True))
+  }
+
+  test("fix12: customFieldValue handles false boolean") {
+    val exp = expTestAb.copy(
+      customFieldValues = Some(List(CustomFieldValue("flag", "false", "boolean")))
+    )
+    val data = ContextData(experiments = List(exp))
+    val context = createContext(data = data)
+    val result = context.customFieldValue("exp_test_ab", "flag")
+    assert(result.contains(Json.False))
+  }
+
+  test("fix12: customFieldValue handles invalid boolean gracefully") {
+    val exp = expTestAb.copy(
+      customFieldValues = Some(List(CustomFieldValue("flag", "not-a-bool", "boolean")))
+    )
+    val data = ContextData(experiments = List(exp))
+    val context = createContext(data = data)
+    val result = context.customFieldValue("exp_test_ab", "flag")
+    assert(result.contains(Json.fromString("not-a-bool")))
+  }
+
+  // ======================
+  // Fix #15: refresh() synchronized
+  // ======================
+
+  test("fix15: refresh is thread-safe with concurrent treatment calls") {
+    val context = createContext()
+
+    val futures = (1 to 20).map { i =>
+      Future {
+        if (i % 2 == 0) {
+          context.treatment("exp_test_ab")
+        } else {
+          context.refresh(testData)
+        }
+      }
+    }
+
+    Await.result(Future.sequence(futures), 10.seconds)
+    assert(context.isReady())
+  }
+
+  // ======================
+  // Fix #16: data() and experiments() synchronized
+  // ======================
+
+  test("fix16: data() is thread-safe") {
+    val context = createContext()
+    val futures = (1 to 50).map { _ =>
+      Future { context.data() }
+    }
+    val results = Await.result(Future.sequence(futures), 5.seconds)
+    assert(results.forall(_.experiments.nonEmpty))
+  }
+
+  test("fix16: experiments() is thread-safe") {
+    val context = createContext()
+    val futures = (1 to 50).map { _ =>
+      Future { context.experiments() }
+    }
+    val results = Await.result(Future.sequence(futures), 5.seconds)
+    assert(results.forall(_.contains("exp_test_ab")))
+  }
+
+  // ======================
+  // Fix #17: getAttribute/getAttributes synchronized
+  // ======================
+
+  test("fix17: getAttribute is thread-safe with concurrent setAttribute") {
+    val context = createContext()
+
+    val futures = (1 to 50).map { i =>
+      Future {
+        if (i % 2 == 0) {
+          context.setAttribute(s"attr_$i", Json.fromInt(i))
+        } else {
+          context.getAttribute(s"attr_${i - 1}")
+          context.getAttributes()
+        }
+      }
+    }
+
+    Await.result(Future.sequence(futures), 5.seconds)
+    assert(context.getAttribute("attr_50").flatMap(_.asNumber).flatMap(_.toInt).contains(50))
+  }
+
+  // ======================
+  // Fix #18: getUnit/getUnits synchronized
+  // ======================
+
+  test("fix18: getUnit is thread-safe") {
+    val context = createContext()
+    val futures = (1 to 50).map { _ =>
+      Future { context.getUnit("session_id") }
+    }
+    val results = Await.result(Future.sequence(futures), 5.seconds)
+    assert(results.forall(_.isDefined))
+  }
+
+  test("fix18: getUnits is thread-safe") {
+    val context = createContext()
+    val futures = (1 to 50).map { _ =>
+      Future { context.getUnits() }
+    }
+    val results = Await.result(Future.sequence(futures), 5.seconds)
+    assert(results.forall(_.nonEmpty))
+  }
+
+  // ======================
+  // Fix #25: Unit IDs not logged in plaintext
+  // ======================
+
+  test("fix25: setUnit masks UID in log output") {
+    var loggedMessage = ""
+    val capturingLogger = new Logger {
+      override def debug(message: => String): Unit = { loggedMessage = message }
+      override def info(message: => String): Unit = ()
+      override def warn(message: => String): Unit = ()
+      override def error(message: => String): Unit = ()
+      override def error(message: => String, throwable: Throwable): Unit = ()
+    }
+
+    val previousLogger = Logger.get
+    Logger.setLogger(capturingLogger)
+    try {
+      val context = createContext(units = Map.empty)
+      context.setUnit("session_id", "my-secret-session-id-12345")
+      assert(!loggedMessage.contains("my-secret-session-id-12345"))
+      assert(loggedMessage.contains("***2345"))
+    } finally {
+      Logger.setLogger(previousLogger)
+    }
+  }
+
+  // ======================
+  // Phase 3.2: readyError
+  // ======================
+
+  test("readyError returns None when context loaded successfully") {
+    val context = createContext()
+    assert(context.readyError().isEmpty)
+  }
+
+  test("readyError returns the error when setDataFailed called with error") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
+    val error = new RuntimeException("data fetch failed")
+    context.setDataFailed(Some(error))
+    assert(context.readyError().contains(error))
+    assert(context.isFailed())
+  }
+
+  test("readyError returns None when setDataFailed called without error") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
+    context.setDataFailed()
+    assert(context.readyError().isEmpty)
+    assert(context.isFailed())
+  }
+
+  // ======================
+  // Phase 4.4: customFieldKeys global scope
+  // ======================
+
+  test("customFieldKeys returns all keys across all experiments") {
+    val exp1 = expTestAb.copy(
+      customFieldValues = Some(List(
+        CustomFieldValue("key1", "val1", "string"),
+        CustomFieldValue("key2", "val2", "string")
+      ))
+    )
+    val exp2 = expTestAb.copy(
+      id = 2,
+      name = "exp_test_abc",
+      customFieldValues = Some(List(
+        CustomFieldValue("key2", "val2b", "string"),
+        CustomFieldValue("key3", "val3", "string")
+      ))
+    )
+    val data = ContextData(experiments = List(exp1, exp2))
+    val context = createContext(data = data)
+    val keys = context.customFieldKeys()
+    assert(keys.contains("key1"))
+    assert(keys.contains("key2"))
+    assert(keys.contains("key3"))
+    assert(keys.distinct.length == keys.length)
+  }
+
+  test("customFieldKeys returns empty list when no experiments have custom fields") {
+    val context = createContext()
+    val keys = context.customFieldKeys()
+    assert(keys.isEmpty)
+  }
+
+  // ======================
+  // Fix 4.1: setOverride works after finalize
+  // ======================
+
+  test("fix4.1: setOverride succeeds after context is finalized") {
+    val context = createContext()
+    Await.result(context.finalizeContext(), 5.seconds)
+    assert(context.isFinalized())
+    var threw = false
+    try {
+      context.setOverride("exp_test_ab", 2)
+    } catch {
+      case _: Exception => threw = true
+    }
+    assert(!threw, "setOverride should not throw after finalize")
+  }
+
+  // ======================
+  // Phase 4.2: close/finalize aliases
+  // ======================
+
+  test("close is alias for finalizeContext") {
+    val context = createContext()
+    assert(!context.isFinalized())
+    Await.result(context.close(), 5.seconds)
+    assert(context.isFinalized())
+  }
+
+  test("isFinalized and isFinalizing exist") {
+    val context = createContext()
+    assert(!context.isFinalized())
+    assert(!context.isFinalizing())
+  }
+
+  // ======================
+  // Phase 4.3: standardized error messages
+  // ======================
+
+  test("not ready error message is standardized") {
+    val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
+    val ex = intercept[IllegalStateException](context.treatment("exp_test_ab"))
+    assert(ex.getMessage == "ABsmartly Context is not yet ready.")
+  }
+
+  test("finalized error message is standardized") {
+    val context = createContext()
+    Await.result(context.close(), 5.seconds)
+    val ex = intercept[IllegalStateException](context.treatment("exp_test_ab"))
+    assert(ex.getMessage == "ABsmartly Context is finalized.")
+  }
+
+  test("unit UID blank error message is standardized") {
+    val context = createContext(units = Map.empty)
+    val ex = intercept[IllegalArgumentException] {
+      context.setUnit("session_id", "")
+    }
+    assert(ex.getMessage.contains("UID must not be blank."))
+  }
+
+  test("unit UID already set error message is standardized") {
+    val context = createContext()
+    val ex = intercept[IllegalStateException] {
+      context.setUnit("session_id", "different-uid")
+    }
+    assert(ex.getMessage.contains("UID already set."))
+  }
+
+  // ======================
+  // Failed loads, publish errors and typed units
+  // ======================
+
+  final class RecordingLogger extends EventLogger {
+    val events = scala.collection.mutable.ListBuffer[(String, Json)]()
+    def logEvent(eventType: String, data: Json): Unit = synchronized { events += (eventType -> data); () }
+    def types: List[String] = synchronized(events.map(_._1).toList)
+  }
+
+  test("setDataFailed leaves the context ready and failed with empty data and logs an error event") {
+    val logger = new RecordingLogger
+    val context = new Context(sdk, None, testUnits, ContextOptions(), logger)
+    context.setDataFailed(Some(new RuntimeException("boom")))
+    assert(context.isReady() && context.isFailed())
+    assert(context.ready().isCompleted)
+    assert(logger.types == List("error"))
+    assert(logger.events.head._2.hcursor.downField("message").as[String] == Right("boom"))
+    assert(context.treatment("exp_test_ab") == 0)
+    assert(context.experiments().isEmpty)
+  }
+
+  test("createContext yields a ready, failed context when the fetch fails") {
+    val logger = new RecordingLogger
+    val failing = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
+    val context = Await.result(failing.createContext(testUnits), 10.seconds)
+    assert(context.isReady() && context.isFailed())
+    assert(context.readyError().isDefined)
+    assert(logger.types == List("error"))
+  }
+
+  test("a failed publish logs an error event and keeps the events queued") {
+    val logger = new RecordingLogger
+    val failingPublisher = new ContextPublisher {
+      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]]): Future[Unit] =
+        Future.failed(new RuntimeException("Publish failed"))
+    }
+    val psdk = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", eventLogger = logger, publisher = Some(failingPublisher)))
+    val context = psdk.createContextWith(testUnits, testData)
+    context.track("goal")
+    intercept[RuntimeException](Await.result(context.publish(), 5.seconds))
+    assert(logger.types == List("ready", "goal", "error"))
+    assert(context.pending() == 1)
+  }
+
+  test("numeric units keep their type and hash like the JS SDK") {
+    val context = createContext(units = Map("session_id" -> "abc"))
+    context.setUnit("user_id", 125L)
+    context.setUnit("float_id", 125.75)
+    assert(context.getUnitValue("user_id").contains(Json.fromLong(125)))
+    assert(context.getUnitValue("float_id").contains(Json.fromDoubleOrNull(125.75)))
+    assert(context.getUnitValue("session_id").contains(Json.fromString("abc")))
+    assert(Utils.hashUnit(125.75) == Utils.hashUnit("126"))
+    assert(Utils.hashUnit(125.0) == Utils.hashUnit("125"))
+    assert(Utils.hashUnit(1e21) == Utils.hashUnit("1e+21"))
+    assert(Utils.hashUnit(-1.5e22) == Utils.hashUnit("-1.5e+22"))
+    assert(Utils.hashUnit(1e20) == Utils.hashUnit("100000000000000000000"))
+    assert(context.getUnitValues() == Map(
+      "session_id" -> Json.fromString("abc"),
+      "user_id" -> Json.fromLong(125),
+      "float_id" -> Json.fromDoubleOrNull(125.75)))
+    context.setUnit("user_id", 125L)
+    assert(intercept[IllegalStateException](context.setUnit("user_id", "125")).getMessage == "Unit 'user_id' UID already set.")
+  }
+
+  test("a context publishes numeric units hashed like the JS SDK") {
+    var published: Map[String, String] = Map.empty
+    val capturing = new ContextPublisher {
+      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]]): Future[Unit] = {
+        published = units
+        Future.successful(())
+      }
+    }
+    val psdk = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", publisher = Some(capturing)))
+    val context = psdk.createContextWith(Map("session_id" -> "abc"), testData)
+    context.setUnit("float_id", 125.75)
+    context.setUnit("user_id", 42L)
+    context.track("goal")
+    Await.result(context.publish(), 5.seconds)
+    assert(published("float_id") == Utils.hashUnit("126"))
+    assert(published("user_id") == Utils.hashUnit("42"))
+    assert(published("session_id") == Utils.hashUnit("abc"))
+  }
+
+  test("a failed refresh fetch logs an error event and rethrows") {
+    val logger = new RecordingLogger
+    val failing = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
+    val context = failing.createContextWith(testUnits, testData)
+    intercept[Exception](context.refresh())
+    assert(logger.types == List("ready", "error"))
+    assert(!context.isFailed())
+  }
+}
