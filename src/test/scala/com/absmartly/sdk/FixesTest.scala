@@ -931,6 +931,13 @@ class FixesTest extends AnyFunSuite {
     assert(context.getUnitValue("session_id").contains(Json.fromString("abc")))
     assert(Utils.hashUnit(125.75) == Utils.hashUnit("126"))
     assert(Utils.hashUnit(125.0) == Utils.hashUnit("125"))
+    assert(Utils.hashUnit(1e21) == Utils.hashUnit("1e+21"))
+    assert(Utils.hashUnit(-1.5e22) == Utils.hashUnit("-1.5e+22"))
+    assert(Utils.hashUnit(1e20) == Utils.hashUnit("100000000000000000000"))
+    assert(context.getUnitValues() == Map(
+      "session_id" -> Json.fromString("abc"),
+      "user_id" -> Json.fromLong(125),
+      "float_id" -> Json.fromDoubleOrNull(125.75)))
     context.setUnit("user_id", 125L)
     assert(intercept[IllegalStateException](context.setUnit("user_id", "125")).getMessage == "Unit 'user_id' UID already set.")
   }

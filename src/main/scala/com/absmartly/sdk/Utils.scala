@@ -24,8 +24,15 @@ object Utils {
    * to an integer (`toFixed(0)`, halves away from zero), so 125.75 hashes as "126".
    */
   def hashUnit(unit: Double): String = {
-    val rounded = new java.math.BigDecimal(unit).setScale(0, java.math.RoundingMode.HALF_UP).toPlainString
-    hashUnit(if (unit < 0 && rounded == "0") "-0" else rounded)
+    if (math.abs(unit) >= 1e21) {
+      // toFixed() falls back to the Number string form here, e.g. "1e+21".
+      val Array(mantissa, exponent) = java.lang.Double.toString(unit).split("E")
+      val m = mantissa.stripSuffix(".0")
+      hashUnit(s"${m}e+$exponent")
+    } else {
+      val rounded = new java.math.BigDecimal(unit).setScale(0, java.math.RoundingMode.HALF_UP).toPlainString
+      hashUnit(if (unit < 0 && rounded == "0") "-0" else rounded)
+    }
   }
 
   /** Base64url encoding without padding, as used for unit hashes. */
