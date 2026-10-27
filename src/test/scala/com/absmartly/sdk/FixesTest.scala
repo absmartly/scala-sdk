@@ -941,4 +941,23 @@ class FixesTest extends AnyFunSuite {
     context.setUnit("user_id", 125L)
     assert(intercept[IllegalStateException](context.setUnit("user_id", "125")).getMessage == "Unit 'user_id' UID already set.")
   }
+
+  test("a context publishes numeric units hashed like the JS SDK") {
+    var published: Map[String, String] = Map.empty
+    val capturing = new ContextPublisher {
+      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]]): Future[Unit] = {
+        published = units
+        Future.successful(())
+      }
+    }
+    val psdk = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", publisher = Some(capturing)))
+    val context = psdk.createContextWith(Map("session_id" -> "abc"), testData)
+    context.setUnit("float_id", 125.75)
+    context.setUnit("user_id", 42L)
+    context.track("goal")
+    Await.result(context.publish(), 5.seconds)
+    assert(published("float_id") == Utils.hashUnit("126"))
+    assert(published("user_id") == Utils.hashUnit("42"))
+    assert(published("session_id") == Utils.hashUnit("abc"))
+  }
 }
