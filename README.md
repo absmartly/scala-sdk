@@ -292,7 +292,7 @@ Await.result(publishFuture, 5.seconds)
 
 ### Finalizing
 
-The `finalizeContext()` method will ensure all events have been published to the ABsmartly collector, like `publish()`, and will also "seal" the context, preventing any further events from being tracked.
+The `finalizeContext()` method will ensure all events have been published to the ABsmartly collector, like `publish()`, and will also "seal" the context, preventing any further events from being tracked. Overrides and custom assignments (single and bulk setters) remain allowed after finalization; treatment and variable reads still throw.
 
 **Note:** The method is named `finalizeContext()` instead of `finalize()` to avoid conflicts with Java's `Object.finalize()`.
 

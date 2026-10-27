@@ -55,9 +55,6 @@ class FixesTest extends AnyFunSuite {
     sdk.createContextWith(units, data, options)
   }
 
-  // ======================
-  // Fix #1/#13/#14: _flush() actually publishes and clears only on success
-  // ======================
 
   test("fix1/13/14: _flush builds PublishEvent and calls sdk.publish") {
     var publishCalled = false
@@ -182,9 +179,6 @@ class FixesTest extends AnyFunSuite {
     assert(publishedAttributes.get.exists(_.name == "age"))
   }
 
-  // ======================
-  // Fix #2: ReDoS thread leak
-  // ======================
 
   test("fix2: regex match with normal pattern works") {
     val expr = parse("""{"match": [{"value": "hello123"}, {"value": "\\d+"}]}""").toOption.get
@@ -206,9 +200,6 @@ class FixesTest extends AnyFunSuite {
     assert(result.asBoolean.contains(false))
   }
 
-  // ======================
-  // Fix #3: Logger @volatile
-  // ======================
 
   test("fix3: Logger instance is visible across threads") {
     val previousLogger = Logger.get
@@ -230,9 +221,6 @@ class FixesTest extends AnyFunSuite {
     }
   }
 
-  // ======================
-  // Fix #4: @volatile state flags
-  // ======================
 
   test("fix4: state flags visible across threads") {
     val context = createContext()
@@ -247,9 +235,6 @@ class FixesTest extends AnyFunSuite {
     assert(readyFromThread)
   }
 
-  // ======================
-  // Fix #5: pending() synchronized
-  // ======================
 
   test("fix5: pending returns consistent count under concurrent access") {
     val context = createContext()
@@ -262,9 +247,6 @@ class FixesTest extends AnyFunSuite {
     assert(results.forall(_ == 1))
   }
 
-  // ======================
-  // Fix #6/#19: variableValue/peekVariableValue synchronized
-  // ======================
 
   test("fix6: variableValue is thread-safe") {
     val context = createContext()
@@ -568,9 +550,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.pending() == 1)
   }
 
-  // ======================
-  // Fix #7: API key masking
-  // ======================
 
   test("fix7: SDKConfig toString masks API key showing only last 4 chars") {
     val cfg = SDKConfig(
@@ -584,9 +563,6 @@ class FixesTest extends AnyFunSuite {
     assert(str.contains("***2345"))
   }
 
-  // ======================
-  // Fix #8: setOverride doesn't remove assigners
-  // ======================
 
   test("fix8: setOverride does not invalidate assigner cache for other experiments") {
     val context = createContext()
@@ -595,9 +571,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.peek("exp_test_ab") == 0)
   }
 
-  // ======================
-  // Fix #11/#22: Matcher uses NonFatal instead of catching VirtualMachineErrors
-  // ======================
 
   test("fix11: AudienceMatcher catches non-fatal exceptions gracefully") {
     val matcher = new AudienceMatcher(Map.empty)
@@ -605,9 +578,6 @@ class FixesTest extends AnyFunSuite {
     assert(result == None)
   }
 
-  // ======================
-  // Fix #12: customFieldValue safe boolean parsing
-  // ======================
 
   test("fix12: customFieldValue handles valid boolean") {
     val exp = expTestAb.copy(
@@ -639,9 +609,6 @@ class FixesTest extends AnyFunSuite {
     assert(result.contains(Json.fromString("not-a-bool")))
   }
 
-  // ======================
-  // Fix #15: refresh() synchronized
-  // ======================
 
   test("fix15: refresh is thread-safe with concurrent treatment calls") {
     val context = createContext()
@@ -660,9 +627,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.isReady())
   }
 
-  // ======================
-  // Fix #16: data() and experiments() synchronized
-  // ======================
 
   test("fix16: data() is thread-safe") {
     val context = createContext()
@@ -682,9 +646,6 @@ class FixesTest extends AnyFunSuite {
     assert(results.forall(_.contains("exp_test_ab")))
   }
 
-  // ======================
-  // Fix #17: getAttribute/getAttributes synchronized
-  // ======================
 
   test("fix17: getAttribute is thread-safe with concurrent setAttribute") {
     val context = createContext()
@@ -704,9 +665,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.getAttribute("attr_50").flatMap(_.asNumber).flatMap(_.toInt).contains(50))
   }
 
-  // ======================
-  // Fix #18: getUnit/getUnits synchronized
-  // ======================
 
   test("fix18: getUnit is thread-safe") {
     val context = createContext()
@@ -726,9 +684,6 @@ class FixesTest extends AnyFunSuite {
     assert(results.forall(_.nonEmpty))
   }
 
-  // ======================
-  // Fix #25: Unit IDs not logged in plaintext
-  // ======================
 
   test("fix25: setUnit masks UID in log output") {
     var loggedMessage = ""
@@ -752,9 +707,6 @@ class FixesTest extends AnyFunSuite {
     }
   }
 
-  // ======================
-  // Phase 3.2: readyError
-  // ======================
 
   test("readyError returns None when context loaded successfully") {
     val context = createContext()
@@ -776,9 +728,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.isFailed())
   }
 
-  // ======================
-  // Phase 4.4: customFieldKeys global scope
-  // ======================
 
   test("customFieldKeys returns all keys across all experiments") {
     val exp1 = expTestAb.copy(
@@ -810,9 +759,6 @@ class FixesTest extends AnyFunSuite {
     assert(keys.isEmpty)
   }
 
-  // ======================
-  // Fix 4.1: setOverride works after finalize
-  // ======================
 
   test("fix4.1: setOverride succeeds after context is finalized") {
     val context = createContext()
@@ -827,9 +773,6 @@ class FixesTest extends AnyFunSuite {
     assert(!threw, "setOverride should not throw after finalize")
   }
 
-  // ======================
-  // Phase 4.2: close/finalize aliases
-  // ======================
 
   test("close is alias for finalizeContext") {
     val context = createContext()
@@ -844,9 +787,6 @@ class FixesTest extends AnyFunSuite {
     assert(!context.isFinalizing())
   }
 
-  // ======================
-  // Phase 4.3: standardized error messages
-  // ======================
 
   test("not ready error message is standardized") {
     val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
@@ -877,9 +817,6 @@ class FixesTest extends AnyFunSuite {
     assert(ex.getMessage.contains("UID already set."))
   }
 
-  // ======================
-  // Failed loads, publish errors and typed units
-  // ======================
 
   final class RecordingLogger extends EventLogger {
     val events = scala.collection.mutable.ListBuffer[(String, Json)]()
@@ -934,6 +871,11 @@ class FixesTest extends AnyFunSuite {
     assert(Utils.hashUnit(1e21) == Utils.hashUnit("1e+21"))
     assert(Utils.hashUnit(-1.5e22) == Utils.hashUnit("-1.5e+22"))
     assert(Utils.hashUnit(1e20) == Utils.hashUnit("100000000000000000000"))
+    assert(Utils.hashUnit(1e23) == Utils.hashUnit("1e+23"))
+    assert(Utils.hashUnit(-1e21) == Utils.hashUnit("-1e+21"))
+    assert(Utils.hashUnit(-0.1) == Utils.hashUnit("-0"))
+    assert(Utils.hashUnit(-0.0) == Utils.hashUnit("0"))
+    assert(Utils.hashUnit(Double.NaN) == Utils.hashUnit("NaN"))
     assert(context.getUnitValues() == Map(
       "session_id" -> Json.fromString("abc"),
       "user_id" -> Json.fromLong(125),

@@ -36,9 +36,8 @@ class Context(
   // Data
   private var _data: ContextData = initialData.getOrElse(ContextData(experiments = List.empty))
   // Units passed as method arguments take precedence over ContextOptions.units
-  private val _units: mutable.Map[String, String] = mutable.Map((options.units ++ initialUnits).toSeq: _*)
-  // The units as they were set (string or number); _units holds their text form.
-  private val _unitValues: mutable.Map[String, Json] = _units.map { case (k, v) => k -> Json.fromString(v) }
+  private val _units: mutable.Map[String, Json] =
+    mutable.Map((options.units ++ initialUnits).toSeq.map { case (k, v) => k -> Json.fromString(v) }: _*)
   private val _attributes: mutable.ListBuffer[Attribute] = {
     val now = System.currentTimeMillis()
     mutable.ListBuffer(options.attributes.toSeq.map { case (name, value) => Attribute(name, value, now) }: _*)
@@ -129,34 +128,32 @@ class Context(
   def setUnit(unitType: String, uid: String): Unit = lock.synchronized {
     checkNotFinalized()
     require(uid.trim.nonEmpty, s"Unit '$unitType' UID must not be blank.")
-    _setUnit(unitType, Json.fromString(uid), uid)
+    _setUnit(unitType, Json.fromString(uid))
   }
 
   /** Sets a numeric unit. It is hashed like the JS SDK does (rounded to an integer). */
   def setUnit(unitType: String, uid: Long): Unit = lock.synchronized {
     checkNotFinalized()
-    _setUnit(unitType, Json.fromLong(uid), uid.toString)
+    _setUnit(unitType, Json.fromLong(uid))
   }
 
   def setUnit(unitType: String, uid: Double): Unit = lock.synchronized {
     checkNotFinalized()
     require(!uid.isNaN && !uid.isInfinite, s"Unit '$unitType' UID must be a finite number.")
-    _setUnit(unitType, Json.fromDoubleOrNull(uid), Json.fromDoubleOrNull(uid).noSpaces)
+    _setUnit(unitType, Json.fromDoubleOrNull(uid))
   }
 
-  private def _setUnit(unitType: String, value: Json, text: String): Unit = {
+  private def _setUnit(unitType: String, value: Json): Unit = {
     require(unitType.trim.nonEmpty, "Unit type must not be blank")
 
-    _unitValues.get(unitType) match {
+    _units.get(unitType) match {
       case Some(existing) if existing != value =>
         throw new IllegalStateException(s"Unit '$unitType' UID already set.")
       case _ =>
-        _units(unitType) = text
-        _unitValues(unitType) = value
-        val uid = text
-        // Invalidate assigner cache for this unit type
+        _units(unitType) = value
         _assigners.remove(unitType)
-        val maskedUid = if (uid.length > 4) s"***${uid.takeRight(4)}" else "***"
+        val text = Context.unitText(value)
+        val maskedUid = if (text.length > 4) s"***${text.takeRight(4)}" else "***"
         logger.debug(s"Set unit '$unitType' = $maskedUid")
     }
   }
@@ -166,20 +163,20 @@ class Context(
   }
 
   def getUnit(unitType: String): Option[String] = lock.synchronized {
-    _units.get(unitType)
+    _units.get(unitType).map(Context.unitText)
   }
 
   def getUnits(): Map[String, String] = lock.synchronized {
-    _units.toMap
+    _units.view.mapValues(Context.unitText).toMap
   }
 
   /** The unit as it was set: a JSON string, or a JSON number for a numeric unit. */
   def getUnitValue(unitType: String): Option[Json] = lock.synchronized {
-    _unitValues.get(unitType)
+    _units.get(unitType)
   }
 
   def getUnitValues(): Map[String, Json] = lock.synchronized {
-    _unitValues.toMap
+    _units.toMap
   }
 
   // ======================
@@ -229,7 +226,6 @@ class Context(
   // ======================
 
   def setCustomAssignment(experimentName: String, variant: Int): Unit = lock.synchronized {
-    checkNotFinalized()
     _cassignments(experimentName) = variant
     _assignments.remove(experimentName)
     logger.debug(s"Custom assignment '$experimentName' = $variant")
@@ -277,7 +273,7 @@ class Context(
   }
 
   // ======================
-  // Custom Fields Methods (Not fully implemented - placeholder)
+  // Custom Fields Methods
   // ======================
 
   def customFieldValue(experimentName: String, fieldName: String): Option[Json] = lock.synchronized {
@@ -376,8 +372,7 @@ class Context(
     } else {
       logger.debug(s"Publishing ${exposures.length} exposures, ${goals.length} goals")
 
-      var publishEventJson: Json = Json.Null
-      val publishFuture =
+      val (publishEventJson, publishFuture) =
         try {
           val unitsList = hashedUnits.map { case (unitType, hashedUid) =>
             PublishUnit(unitType, hashedUid)
@@ -391,8 +386,7 @@ class Context(
             goals = goals,
             attributes = if (attributes.nonEmpty) Some(attributes) else None
           )
-
-          publishEventJson = publishEvent.asJson
+          val eventJson = publishEvent.asJson
 
           val attrOpt = if (attributes.nonEmpty) Some(attributes) else None
           val sent = sdk.getConfig.publisher match {
@@ -400,10 +394,12 @@ class Context(
             case None => sdk.publish(hashedUnits, true, exposures, goals, attrOpt)
           }
           // A publisher returning null must not strand the drained batch in flight.
-          if (sent == null) Future.failed(new IllegalStateException("ContextPublisher returned a null Future"))
-          else sent
+          val delivery =
+            if (sent == null) Future.failed(new IllegalStateException("ContextPublisher returned a null Future"))
+            else sent
+          (eventJson, delivery)
         } catch {
-          case scala.util.control.NonFatal(e) => Future.failed(e)
+          case scala.util.control.NonFatal(e) => (Json.Null, Future.failed(e))
         }
 
       publishFuture.onComplete { result =>
@@ -580,23 +576,8 @@ class Context(
 
     val assignment = experiment match {
       case Some(exp) if hasOverride =>
-        Assignment(
-          id = exp.id,
-          name = experimentName,
-          unitType = exp.unitType,
-          iteration = exp.iteration,
-          trafficSplit = exp.trafficSplit,
-          fullOnVariant = exp.fullOnVariant,
-          variant = _overrides(experimentName),
-          assigned = false,
-          exposed = false,
-          eligible = true,
-          overridden = true,
-          audienceMismatch = false,
-          fullOn = false,
-          custom = false,
-          attrsSeq = _attrsSeq
-        )
+        createAssignmentRaw(exp, _overrides(experimentName), assigned = false, eligible = true,
+          audienceMismatch = false, fullOn = false, custom = false, overridden = true)
 
       case Some(exp) =>
         val audienceMismatch = checkAudienceMismatch(exp)
@@ -686,7 +667,6 @@ class Context(
       case Some(aud) if aud.nonEmpty && aud != "null" && aud != "{}" =>
         if (_attrsSeq > assignment.attrsSeq) {
           val matcher = new AudienceMatcher(getAttributes())
-          // An indeterminate (None) result keeps the cached flag, as in JS.
           val newAudienceMismatch = matcher.evaluate(Some(aud)) match {
             case Some(result) => !result
             case None => assignment.audienceMismatch
@@ -827,7 +807,7 @@ class Context(
   }
 
   private def _unitHash(unitType: String): String =
-    _unitValues.get(unitType) match {
+    _units.get(unitType) match {
       case Some(value) => value.asNumber.map(n => Utils.hashUnit(n.toDouble)).getOrElse(Utils.hashUnit(value.asString.getOrElse("")))
       case None => Utils.hashUnit("")
     }
@@ -852,6 +832,8 @@ class Context(
 }
 
 object Context {
+  private[sdk] def unitText(value: Json): String = value.asString.getOrElse(value.noSpaces)
+
   private[sdk] def errorJson(error: Throwable): Json =
     Json.obj("message" -> Option(error.getMessage).map(Json.fromString).getOrElse(Json.Null))
 }
