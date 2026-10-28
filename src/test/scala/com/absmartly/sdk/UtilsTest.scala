@@ -144,6 +144,12 @@ class UtilsTest extends AnyFunSuite {
     }
   }
 
+  test("numbers at power-of-two boundaries format and hash like JavaScript") {
+    val x = Math.scalb(1.0, 89)
+    assert(Utils.hashUnit(x) == Utils.hashUnit("6.189700196426902e+26"))
+    assert(Utils.hashUnit(x) == "jIW0OrUF9NsZmugX9sktOQ")
+  }
+
   test("utf8Bytes replaces each lone surrogate with U+FFFD and keeps pairs") {
     val replacement = Array(0xEF, 0xBF, 0xBD).map(_.toByte)
     assert(Utils.utf8Bytes("a\uD800b").sameElements("a".getBytes("UTF-8") ++ replacement ++ "b".getBytes("UTF-8")))

@@ -272,9 +272,6 @@ class Context(
     }
   }
 
-  // ======================
-  // Custom Fields Methods
-  // ======================
 
   def customFieldValue(experimentName: String, fieldName: String): Option[Json] = lock.synchronized {
     checkReady(expectNotFinalized = true)

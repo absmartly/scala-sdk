@@ -45,9 +45,17 @@ object Utils {
   // Shortest round-trip digits, as JS prints them; JDK 17 Double.toString is not always shortest.
   private def jsExponential(abs: Double): String = {
     val exact = new java.math.BigDecimal(abs)
+    // At powers of two the round-trip interval is asymmetric, so the nearest
+    // p-digit decimal can miss while the one on the other side still round-trips.
+    val modes = Seq(java.math.RoundingMode.HALF_EVEN, java.math.RoundingMode.FLOOR, java.math.RoundingMode.CEILING)
     val shortest = (1 to 17).iterator
-      .map(p => exact.round(new java.math.MathContext(p, java.math.RoundingMode.HALF_EVEN)))
-      .find(_.doubleValue == abs)
+      .map { p =>
+        modes.map(m => exact.round(new java.math.MathContext(p, m)))
+          .filter(_.doubleValue == abs)
+          .sortBy(c => c.subtract(exact).abs)
+          .headOption
+      }
+      .collectFirst { case Some(c) => c }
       .getOrElse(exact)
       .stripTrailingZeros
     val digits = shortest.unscaledValue.toString
