@@ -14,13 +14,6 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
 
-/**
- * Hermetic integration test: starts a real local HTTP server (JDK built-in
- * com.sun.net.httpserver.HttpServer) on an ephemeral port, points the SDK's
- * endpoint at it, and drives the PUBLIC SDK API so the real sttp
- * HttpURLConnectionBackend performs a GET /context (createContext) and a
- * PUT /context (treatment + track -> publish). Asserts the wire contract.
- */
 class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
 
   case class RecordedRequest(
@@ -91,7 +84,6 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
       5.seconds
     )
 
-    // --- assert the real GET /context ---
     val recorded = requests.asScala.toList
     val get = recorded.find(_.method == "GET")
     assert(get.isDefined, "expected a GET /context")
@@ -100,7 +92,6 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(query.get("application").contains("website"))
     assert(query.get("environment").contains("dev"))
 
-    // --- drive an exposure + a goal, then publish ---
     context.treatment("not_found_experiment")
     context.track("payment", Some(Map("value" -> Json.fromInt(99))))
     Await.result(context.publish(), 5.seconds)
@@ -110,7 +101,6 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(put.get.path == "/context")
     assert(put.get.rawQuery.isEmpty, "PUT should carry no query params")
 
-    // --- headers (full canonical set) ---
     val h = put.get.headers
     assert(h.get("x-api-key").contains("test-api-key"))
     assert(h.get("x-application").contains("website"))
@@ -119,7 +109,6 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(h.get("x-agent").exists(_.nonEmpty), "X-Agent must be present and non-empty")
     assert(h.get("content-type").exists(_.contains("application/json")))
 
-    // --- body ---
     val json = parse(put.get.body).getOrElse(Json.Null)
     val cursor = json.hcursor
     assert(cursor.get[Boolean]("hashed").contains(true))

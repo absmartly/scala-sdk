@@ -35,7 +35,7 @@ object Evaluator {
     if (expr.isArray) {
       evaluateAnd(expr, vars)
     } else {
-      expr.asObject.flatMap(_.toList.headOption) match {
+      expr.asObject.flatMap(_.toIterable.headOption) match {
         case Some((op, args)) => evaluateOperator(op, args, vars)
         case None => Json.Null
       }
@@ -49,7 +49,7 @@ object Evaluator {
       case "not" => evaluateNot(args, vars)
       case "null" => evaluateNull(args, vars)
       case "var" => evaluateVar(args, vars)
-      case "value" => args // Literal value
+      case "value" => args
       case "eq" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ == 0))
       case "gt" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ > 0))
       case "gte" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ >= 0))
@@ -65,7 +65,6 @@ object Evaluator {
 
   private def truthy(value: Json): Boolean = Utils.booleanConvert(value).getOrElse(false)
 
-  // AND operator: all arguments must be truthy; an empty AND is true
   private def evaluateAnd(args: Json, vars: Map[String, Json]): Json = {
     args.asArray match {
       case Some(arr) => Json.fromBoolean(arr.forall(arg => truthy(evaluate(arg, vars))))
@@ -73,7 +72,6 @@ object Evaluator {
     }
   }
 
-  // OR operator: any argument must be truthy; an empty OR is true
   private def evaluateOr(args: Json, vars: Map[String, Json]): Json = {
     args.asArray match {
       case Some(arr) => Json.fromBoolean(arr.isEmpty || arr.exists(arg => truthy(evaluate(arg, vars))))
@@ -81,17 +79,14 @@ object Evaluator {
     }
   }
 
-  // NOT operator: negate boolean value
   private def evaluateNot(args: Json, vars: Map[String, Json]): Json = {
     Json.fromBoolean(!truthy(evaluate(args, vars)))
   }
 
-  // NULL operator: check if value is null
   private def evaluateNull(args: Json, vars: Map[String, Json]): Json = {
     Json.fromBoolean(evaluate(args, vars).isNull)
   }
 
-  // VAR operator: extract variable from context; the path is a string or {"path": string}
   private def evaluateVar(args: Json, vars: Map[String, Json]): Json = {
     val pathOpt = args.asString.orElse(args.asObject.flatMap(_("path")).flatMap(_.asString))
     pathOpt match {
@@ -121,8 +116,7 @@ object Evaluator {
     }
   }
 
-  // IN operator (also registered as "contains"). Haystack-first: [haystack, needle].
-  // Array: any item compares equal; string: substring; object: key lookup; otherwise null.
+  // Haystack-first: [haystack, needle], as in the JavaScript SDK.
   private def evaluateIn(haystack: Json, needle: Json): Option[Boolean] = {
     haystack.asArray match {
       case Some(items) =>
@@ -139,8 +133,7 @@ object Evaluator {
     }
   }
 
-  // MATCH operator: invalid patterns yield null (D5). Preserve the SDK's
-  // existing false result for resource-limit rejection and matching deadlines.
+  // Invalid patterns yield null; resource-limit rejections and deadlines yield false.
   private def evaluateMatch(text: Json, pattern: Json): Option[Boolean] = {
     for {
       textStr <- Utils.stringConvert(text)

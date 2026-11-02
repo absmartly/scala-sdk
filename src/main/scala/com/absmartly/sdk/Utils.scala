@@ -23,16 +23,45 @@ object Utils {
    * Hash a numeric unit the way the JS SDK does: the number is first rounded
    * to an integer (`toFixed(0)`, halves away from zero), so 125.75 hashes as "126".
    */
-  def hashUnit(unit: Double): String = {
-    if (math.abs(unit) >= 1e21) {
-      // toFixed() falls back to the Number string form here, e.g. "1e+21".
-      val Array(mantissa, exponent) = java.lang.Double.toString(unit).split("E")
-      val m = mantissa.stripSuffix(".0")
-      hashUnit(s"${m}e+$exponent")
-    } else {
-      val rounded = new java.math.BigDecimal(unit).setScale(0, java.math.RoundingMode.HALF_UP).toPlainString
-      hashUnit(if (unit < 0 && rounded == "0") "-0" else rounded)
+  def hashUnit(unit: Double): String = hashUnit(toFixed(unit, 0))
+
+  /**
+   * JS `Number.prototype.toFixed`: the sign is taken first (so -0.1 gives "-0"
+   * at 0 digits), halves round away from zero, and NaN, infinities and
+   * magnitudes from 1e21 up use the Number string form (e.g. "1e+21").
+   */
+  private def toFixed(d: Double, digits: Int): String = {
+    if (d.isNaN) "NaN"
+    else if (d.isInfinite) (if (d > 0) "Infinity" else "-Infinity")
+    else {
+      val abs = math.abs(d)
+      val body =
+        if (abs >= 1e21) jsExponential(abs)
+        else new java.math.BigDecimal(abs).setScale(digits, java.math.RoundingMode.HALF_UP).toPlainString
+      (if (d < 0) "-" else "") + body
     }
+  }
+
+  // Shortest round-trip digits, as JS prints them; JDK 17 Double.toString is not always shortest.
+  private def jsExponential(abs: Double): String = {
+    val exact = new java.math.BigDecimal(abs)
+    // At powers of two the round-trip interval is asymmetric, so the nearest
+    // p-digit decimal can miss while the one on the other side still round-trips.
+    val modes = Seq(java.math.RoundingMode.HALF_EVEN, java.math.RoundingMode.FLOOR, java.math.RoundingMode.CEILING)
+    val shortest = (1 to 17).iterator
+      .map { p =>
+        modes.map(m => exact.round(new java.math.MathContext(p, m)))
+          .filter(_.doubleValue == abs)
+          .sortBy(c => c.subtract(exact).abs)
+          .headOption
+      }
+      .collectFirst { case Some(c) => c }
+      .getOrElse(exact)
+      .stripTrailingZeros
+    val digits = shortest.unscaledValue.toString
+    val exponent = digits.length - 1 - shortest.scale
+    val mantissa = if (digits.length > 1) s"${digits.head}.${digits.tail}" else digits
+    s"${mantissa}e+$exponent"
   }
 
   /** Base64url encoding without padding, as used for unit hashes. */
@@ -46,19 +75,12 @@ object Utils {
    * lone surrogate instead.
    */
   def utf8Bytes(value: String): Array[Byte] = {
-    val sb = new java.lang.StringBuilder(value.length)
-    var i = 0
-    while (i < value.length) {
-      val c = value.charAt(i)
-      if (Character.isHighSurrogate(c) && i + 1 < value.length && Character.isLowSurrogate(value.charAt(i + 1))) {
-        sb.append(c).append(value.charAt(i + 1))
-        i += 2
-      } else {
-        sb.append(if (Character.isSurrogate(c)) '\uFFFD' else c)
-        i += 1
-      }
-    }
-    sb.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+    val encoder = java.nio.charset.StandardCharsets.UTF_8.newEncoder()
+      .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+      .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
+      .replaceWith(Array(0xEF.toByte, 0xBF.toByte, 0xBD.toByte))
+    val encoded = encoder.encode(java.nio.CharBuffer.wrap(value))
+    java.util.Arrays.copyOfRange(encoded.array, encoded.arrayOffset + encoded.position(), encoded.arrayOffset + encoded.limit())
   }
 
   /** JS `isNumeric`: true only for a JSON number. */
@@ -162,10 +184,8 @@ object Utils {
     }
   }
 
-  private def formatNumber(d: Double): String = {
-    val fixed = new java.math.BigDecimal(d).setScale(15, java.math.RoundingMode.HALF_UP).toPlainString
-    fixed.replaceFirst("\\.?0{0,15}$", "")
-  }
+  // JS: x.toFixed(15).replace(/\.?0{0,15}$/, "")
+  private def formatNumber(d: Double): String = toFixed(d, 15).replaceFirst("\\.?0{0,15}$", "")
 
   /**
    * Compare two JSON values (JS `Evaluator.compare`).
