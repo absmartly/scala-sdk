@@ -226,12 +226,8 @@ class Context(
    * was created (the `_attrsSeq` bump invalidates any cached assignment). This
    * map is used for evaluation only; it is never published.
    */
-  private def evaluationAttributes(): Map[String, Json] = {
-    val result = mutable.Map[String, Json]()
-    systemAttributes.foreach { case (name, value) => result(name) = value }
-    _attributes.foreach { attr => result(attr.name) = attr.value }
-    result.toMap
-  }
+  private def evaluationAttributes(): Map[String, Json] =
+    systemAttributes ++ getAttributes()
 
   // ======================
   // Override Methods
