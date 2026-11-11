@@ -26,6 +26,8 @@ All notable changes to the ABsmartly Scala SDK are documented in this file.
   broken today; this release fixes them, but the assignment they produce changes.
 
 - `app_version` / `application_version` is never injected into the audience
-  evaluation map. A filter on `app_version` does not match (the SDK still sends
-  the `X-Application-Version` request header for the collector, but it is not an
-  evaluable attribute).
+  evaluation map. Unlike `application`/`environment`, it is not added
+  automatically, so a filter on `app_version` does not match unless a caller
+  sets it explicitly with `setAttribute("app_version", ...)`. The SDK still
+  sends the `X-Application-Version` request header for the collector; that
+  header is unrelated to the evaluation map.
