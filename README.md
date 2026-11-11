@@ -249,6 +249,13 @@ context.setAttributes(Map(
 ))
 ```
 
+Audiences are always evaluated with the client's configured `application` and
+`environment` as built-in attributes, so audience filters can target them
+without you setting anything. A user-set attribute of the same name always
+wins — including one set after the context is created, which re-evaluates any
+cached assignment. These built-in values are used for evaluation only; they are
+never added to the publish payload (the collector attaches them server-side).
+
 ### Custom Assignments
 
 Custom assignments allow you to set a specific variant for an experiment programmatically.
