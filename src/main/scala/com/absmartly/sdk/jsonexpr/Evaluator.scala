@@ -173,7 +173,7 @@ private[jsonexpr] class DeadlineCharSequence(inner: CharSequence, deadlineNanos:
   override def length(): Int = inner.length()
   override def charAt(index: Int): Char = {
     counter += 1
-    if ((counter & 0xFF) == 0 && System.nanoTime() - deadlineNanos > 0) throw new RegexTimeoutException
+    if ((counter & 0xff) == 0 && System.nanoTime() - deadlineNanos > 0) throw new RegexTimeoutException
     inner.charAt(index)
   }
   override def subSequence(start: Int, end: Int): CharSequence = new DeadlineCharSequence(inner.subSequence(start, end), deadlineNanos)

@@ -6,7 +6,7 @@ import io.circe.generic.semiauto._
 /**
  * SDK Configuration
  */
-case class SDKConfig private(
+case class SDKConfig private (
   endpoint: String,
   apiKey: String,
   application: String,
@@ -19,7 +19,7 @@ case class SDKConfig private(
   override def toString: String = {
     val maskedKey = if (apiKey.length > 4) s"***${apiKey.takeRight(4)}" else "***"
     s"SDKConfig(endpoint=$endpoint, apiKey=$maskedKey, " +
-    s"application=$application, environment=$environment, retries=$retries, timeout=$timeout)"
+      s"application=$application, environment=$environment, retries=$retries, timeout=$timeout)"
   }
 }
 
@@ -107,9 +107,24 @@ object ExperimentData {
       audienceStrict <- c.downField("audienceStrict").as[Option[Boolean]].map(_.getOrElse(false))
       audience <- c.downField("audience").as[Option[String]]
       customFieldValues <- c.downField("customFieldValues").as[Option[List[CustomFieldValue]]]
-    } yield ExperimentData(id, name, unitType, iteration, seedHi, seedLo, split,
-      trafficSeedHi, trafficSeedLo, trafficSplit, fullOnVariant, applications, variants,
-      audienceStrict, audience, customFieldValues)
+    } yield ExperimentData(
+      id,
+      name,
+      unitType,
+      iteration,
+      seedHi,
+      seedLo,
+      split,
+      trafficSeedHi,
+      trafficSeedLo,
+      trafficSplit,
+      fullOnVariant,
+      applications,
+      variants,
+      audienceStrict,
+      audience,
+      customFieldValues
+    )
   }
   implicit val encoder: Encoder[ExperimentData] = deriveEncoder
 }

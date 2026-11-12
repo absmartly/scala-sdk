@@ -17,16 +17,16 @@ object Murmur3 {
   def hash32(key: Array[Byte], seed: Int = 0): Int = {
     var hash = seed
     val len = key.length
-    val n = len & ~3  // Process full 4-byte blocks
+    val n = len & ~3 // Process full 4-byte blocks
 
     // Process 4-byte chunks (little-endian)
     var i = 0
     while (i < n) {
       val chunk = (
         (key(i) & 0xff) |
-        ((key(i + 1) & 0xff) << 8) |
-        ((key(i + 2) & 0xff) << 16) |
-        ((key(i + 3) & 0xff) << 24)
+          ((key(i + 1) & 0xff) << 8) |
+          ((key(i + 2) & 0xff) << 16) |
+          ((key(i + 3) & 0xff) << 24)
       )
       hash ^= scramble32(chunk)
       hash = rotl32(hash, 13)
@@ -82,6 +82,3 @@ object Murmur3 {
     hash32(Utils.utf8Bytes(str), seed)
   }
 }
-
-
-

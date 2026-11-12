@@ -9,9 +9,9 @@ class UtilsTest extends AnyFunSuite {
   test("hashUnit produces base64url encoded MD5") {
     val result = Utils.hashUnit("bleh@absmartly.com")
     assert(result.nonEmpty)
-    assert(!result.contains("+"))  // base64url shouldn't have +
-    assert(!result.contains("/"))  // base64url shouldn't have /
-    assert(!result.contains("="))  // no padding
+    assert(!result.contains("+")) // base64url shouldn't have +
+    assert(!result.contains("/")) // base64url shouldn't have /
+    assert(!result.contains("=")) // no padding
   }
 
   // chooseVariant tests (matching JavaScript SDK expectations)
@@ -137,8 +137,15 @@ class UtilsTest extends AnyFunSuite {
 
   test("stringConvert formats numbers like the JavaScript SDK") {
     val cases = List(
-      1e23 -> "1e+23", 1e21 -> "1e+21", 1e30 -> "1e+3", -1.5e300 -> "-1.5e+3",
-      -1e-16 -> "-0", -0.0 -> "0", 0.1 + 0.2 -> "0.3", 123.456 -> "123.456000000000003")
+      1e23 -> "1e+23",
+      1e21 -> "1e+21",
+      1e30 -> "1e+3",
+      -1.5e300 -> "-1.5e+3",
+      -1e-16 -> "-0",
+      -0.0 -> "0",
+      0.1 + 0.2 -> "0.3",
+      123.456 -> "123.456000000000003"
+    )
     cases.foreach { case (value, expected) =>
       assert(Utils.stringConvert(Json.fromDoubleOrNull(value)).contains(expected), s"$value")
     }
@@ -150,9 +157,8 @@ class UtilsTest extends AnyFunSuite {
     assert(Utils.hashUnit(x) == "jIW0OrUF9NsZmugX9sktOQ")
   }
 
-
   test("utf8Bytes replaces each lone surrogate with U+FFFD and keeps pairs") {
-    val replacement = Array(0xEF, 0xBF, 0xBD).map(_.toByte)
+    val replacement = Array(0xef, 0xbf, 0xbd).map(_.toByte)
     assert(Utils.utf8Bytes("a\uD800b").sameElements("a".getBytes("UTF-8") ++ replacement ++ "b".getBytes("UTF-8")))
     assert(Utils.utf8Bytes("\uDC00\uD800").sameElements(replacement ++ replacement))
     assert(Utils.utf8Bytes("x\uD83D").sameElements("x".getBytes("UTF-8") ++ replacement))

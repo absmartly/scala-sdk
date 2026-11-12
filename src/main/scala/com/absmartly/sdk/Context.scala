@@ -355,13 +355,16 @@ class Context(
 
     _goals += goal
 
-    safeLog("goal", Json.obj(
-      "name" -> Json.fromString(goal.name),
-      "achievedAt" -> Json.fromLong(goal.achievedAt),
-      "properties" -> goal.properties.map(p =>
-        Json.obj(p.toSeq: _*)
-      ).getOrElse(Json.Null)
-    ))
+    safeLog(
+      "goal",
+      Json.obj(
+        "name" -> Json.fromString(goal.name),
+        "achievedAt" -> Json.fromLong(goal.achievedAt),
+        "properties" -> goal.properties.map(p =>
+          Json.obj(p.toSeq: _*)
+        ).getOrElse(Json.Null)
+      )
+    )
 
     logger.debug(s"Tracked goal '$goalName' with ${properties.map(_.size).getOrElse(0)} properties")
   }
@@ -598,15 +601,22 @@ class Context(
 
     val assignment = experiment match {
       case Some(exp) if hasOverride =>
-        createAssignmentRaw(exp, _overrides(experimentName), assigned = false, eligible = true,
-          audienceMismatch = false, fullOn = false, custom = false, overridden = true)
+        createAssignmentRaw(
+          exp,
+          _overrides(experimentName),
+          assigned = false,
+          eligible = true,
+          audienceMismatch = false,
+          fullOn = false,
+          custom = false,
+          overridden = true
+        )
 
       case Some(exp) =>
         val audienceMismatch = checkAudienceMismatch(exp)
 
         if (exp.audienceStrict && audienceMismatch) {
-          createAssignmentRaw(exp, 0, assigned = false, eligible = true,
-            audienceMismatch = true, fullOn = false, custom = false)
+          createAssignmentRaw(exp, 0, assigned = false, eligible = true, audienceMismatch = true, fullOn = false, custom = false)
         } else if (exp.fullOnVariant == 0) {
           _units.get(exp.unitType) match {
             case Some(_) =>
@@ -615,24 +625,27 @@ class Context(
 
               if (eligible) {
                 if (hasCustom) {
-                  createAssignmentRaw(exp, _cassignments(experimentName), assigned = true, eligible = true,
-                    audienceMismatch = audienceMismatch, fullOn = false, custom = true)
+                  createAssignmentRaw(
+                    exp,
+                    _cassignments(experimentName),
+                    assigned = true,
+                    eligible = true,
+                    audienceMismatch = audienceMismatch,
+                    fullOn = false,
+                    custom = true
+                  )
                 } else {
                   val variant = assigner.assign(exp.split, exp.seedHi, exp.seedLo)
-                  createAssignmentRaw(exp, variant, assigned = true, eligible = true,
-                    audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+                  createAssignmentRaw(exp, variant, assigned = true, eligible = true, audienceMismatch = audienceMismatch, fullOn = false, custom = false)
                 }
               } else {
-                createAssignmentRaw(exp, 0, assigned = true, eligible = false,
-                  audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+                createAssignmentRaw(exp, 0, assigned = true, eligible = false, audienceMismatch = audienceMismatch, fullOn = false, custom = false)
               }
             case None =>
-              createAssignmentRaw(exp, 0, assigned = true, eligible = false,
-                audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+              createAssignmentRaw(exp, 0, assigned = true, eligible = false, audienceMismatch = audienceMismatch, fullOn = false, custom = false)
           }
         } else {
-          createAssignmentRaw(exp, exp.fullOnVariant, assigned = true, eligible = true,
-            audienceMismatch = audienceMismatch, fullOn = true, custom = false)
+          createAssignmentRaw(exp, exp.fullOnVariant, assigned = true, eligible = true, audienceMismatch = audienceMismatch, fullOn = true, custom = false)
         }
 
       case None =>
@@ -707,9 +720,16 @@ class Context(
     overridden: Boolean = false
   ): Assignment = {
     val audienceMismatch = checkAudienceMismatch(exp)
-    createAssignmentRaw(exp, variant, assigned = true, eligible = true,
-      audienceMismatch = audienceMismatch, fullOn = false, custom = false,
-      overridden = overridden)
+    createAssignmentRaw(
+      exp,
+      variant,
+      assigned = true,
+      eligible = true,
+      audienceMismatch = audienceMismatch,
+      fullOn = false,
+      custom = false,
+      overridden = overridden
+    )
   }
 
   private def createAssignmentRaw(
@@ -756,9 +776,11 @@ class Context(
   }
 
   private def getOrCreateAssigner(unitType: String): VariantAssigner = {
-    _assigners.getOrElseUpdate(unitType, {
-      new VariantAssigner(_unitHash(unitType))
-    })
+    _assigners.getOrElseUpdate(
+      unitType, {
+        new VariantAssigner(_unitHash(unitType))
+      }
+    )
   }
 
   private def _variableValue(key: String, defaultValue: String, queueExposure: Boolean): String = {
@@ -808,19 +830,22 @@ class Context(
 
       _exposures += exposure
 
-      safeLog("exposure", Json.obj(
-        "id" -> Json.fromInt(exposure.id),
-        "name" -> Json.fromString(exposure.name),
-        "unit" -> (if (exposure.unit.isEmpty) Json.Null else Json.fromString(exposure.unit)),
-        "variant" -> Json.fromInt(exposure.variant),
-        "exposedAt" -> Json.fromLong(exposure.exposedAt),
-        "assigned" -> Json.fromBoolean(exposure.assigned),
-        "eligible" -> Json.fromBoolean(exposure.eligible),
-        "overridden" -> Json.fromBoolean(exposure.overridden),
-        "fullOn" -> Json.fromBoolean(exposure.fullOn),
-        "custom" -> Json.fromBoolean(exposure.custom),
-        "audienceMismatch" -> Json.fromBoolean(exposure.audienceMismatch)
-      ))
+      safeLog(
+        "exposure",
+        Json.obj(
+          "id" -> Json.fromInt(exposure.id),
+          "name" -> Json.fromString(exposure.name),
+          "unit" -> (if (exposure.unit.isEmpty) Json.Null else Json.fromString(exposure.unit)),
+          "variant" -> Json.fromInt(exposure.variant),
+          "exposedAt" -> Json.fromLong(exposure.exposedAt),
+          "assigned" -> Json.fromBoolean(exposure.assigned),
+          "eligible" -> Json.fromBoolean(exposure.eligible),
+          "overridden" -> Json.fromBoolean(exposure.overridden),
+          "fullOn" -> Json.fromBoolean(exposure.fullOn),
+          "custom" -> Json.fromBoolean(exposure.custom),
+          "audienceMismatch" -> Json.fromBoolean(exposure.audienceMismatch)
+        )
+      )
     }
   }
 

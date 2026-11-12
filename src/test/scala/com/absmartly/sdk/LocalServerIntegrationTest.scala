@@ -30,30 +30,33 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
 
   override def beforeEach(): Unit = {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
-    server.createContext("/context", (exchange: HttpExchange) => {
-      val body = new String(exchange.getRequestBody.readAllBytes(), StandardCharsets.UTF_8)
-      val headers = exchange.getRequestHeaders.asScala.map { case (k, v) =>
-        k.toLowerCase -> v.asScala.mkString(",")
-      }.toMap
-      val uri = exchange.getRequestURI
-      requests.add(RecordedRequest(
-        method = exchange.getRequestMethod,
-        path = uri.getPath,
-        rawQuery = Option(uri.getRawQuery).getOrElse(""),
-        headers = headers,
-        body = body
-      ))
+    server.createContext(
+      "/context",
+      (exchange: HttpExchange) => {
+        val body = new String(exchange.getRequestBody.readAllBytes(), StandardCharsets.UTF_8)
+        val headers = exchange.getRequestHeaders.asScala.map { case (k, v) =>
+          k.toLowerCase -> v.asScala.mkString(",")
+        }.toMap
+        val uri = exchange.getRequestURI
+        requests.add(RecordedRequest(
+          method = exchange.getRequestMethod,
+          path = uri.getPath,
+          rawQuery = Option(uri.getRawQuery).getOrElse(""),
+          headers = headers,
+          body = body
+        ))
 
-      val response =
-        if (exchange.getRequestMethod == "GET") """{"experiments":[]}"""
-        else "{}"
-      val bytes = response.getBytes(StandardCharsets.UTF_8)
-      exchange.getResponseHeaders.add("Content-Type", "application/json")
-      exchange.sendResponseHeaders(200, bytes.length.toLong)
-      val os = exchange.getResponseBody
-      os.write(bytes)
-      os.close()
-    })
+        val response =
+          if (exchange.getRequestMethod == "GET") """{"experiments":[]}"""
+          else "{}"
+        val bytes = response.getBytes(StandardCharsets.UTF_8)
+        exchange.getResponseHeaders.add("Content-Type", "application/json")
+        exchange.sendResponseHeaders(200, bytes.length.toLong)
+        val os = exchange.getResponseBody
+        os.write(bytes)
+        os.close()
+      }
+    )
     server.start()
     port = server.getAddress.getPort
   }
