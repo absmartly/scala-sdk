@@ -13,7 +13,8 @@ import scala.util.{Try, Success, Failure}
  * evaluates to null.
  *
  * Operators: and, or, not, null, var, value, eq, gt, gte, lt, lte,
- * in (haystack-first; `contains` is an alias), match.
+ * in (haystack-first; `contains` is an alias), match, and semver_eq,
+ * semver_gt, semver_gte, semver_lt, semver_lte.
  */
 object Evaluator {
 
@@ -57,6 +58,11 @@ object Evaluator {
       case "lte" => binary(args, vars)((l, r) => Utils.compare(l, r).map(_ <= 0))
       case "in" | "contains" => binary(args, vars)(evaluateIn)
       case "match" => binary(args, vars)(evaluateMatch)
+      case "semver_eq" => binary(args, vars)((l, r) => versionCompare(l, r).map(_ == 0))
+      case "semver_gt" => binary(args, vars)((l, r) => versionCompare(l, r).map(_ > 0))
+      case "semver_gte" => binary(args, vars)((l, r) => versionCompare(l, r).map(_ >= 0))
+      case "semver_lt" => binary(args, vars)((l, r) => versionCompare(l, r).map(_ < 0))
+      case "semver_lte" => binary(args, vars)((l, r) => versionCompare(l, r).map(_ <= 0))
       case _ =>
         logger.error(s"Unknown operator '${Logger.sanitize(op, 50)}' with args: ${Logger.sanitize(args.noSpaces)}")
         Json.Null
@@ -131,6 +137,77 @@ object Evaluator {
             haystack.asObject.map(obj => Utils.stringConvert(needle).exists(obj.contains))
         }
     }
+  }
+
+  /**
+   * Compare two versions like the JS SDK's `Evaluator.versionCompare`. Both
+   * sides are converted to strings; a leading "v"/"V" and build metadata
+   * ("+...") are ignored, missing core parts count as "0", numeric identifiers
+   * compare numerically (and sort before alphanumeric ones), and a release
+   * sorts after any of its pre-releases. None when either side is empty or
+   * has no string form.
+   */
+  private[sdk] def versionCompare(lhs: Json, rhs: Json): Option[Int] = {
+    for {
+      l <- Utils.stringConvert(lhs).filter(_.nonEmpty).flatMap(parseSemver)
+      r <- Utils.stringConvert(rhs).filter(_.nonEmpty).flatMap(parseSemver)
+    } yield {
+      val (lParts, lPre) = l
+      val (rParts, rPre) = r
+      val core = (0 until math.max(lParts.length, rParts.length)).iterator
+        .map(i => compareIdentifiers(lParts.lift(i).getOrElse("0"), rParts.lift(i).getOrElse("0")))
+        .find(_ != 0)
+      core.getOrElse {
+        if (lPre.isEmpty && rPre.isEmpty) 0
+        else if (lPre.isEmpty) 1
+        else if (rPre.isEmpty) -1
+        else {
+          val lp = lPre.split("\\.", -1)
+          val rp = rPre.split("\\.", -1)
+          (0 until math.max(lp.length, rp.length)).iterator.map { i =>
+            if (i >= lp.length) -1
+            else if (i >= rp.length) 1
+            else compareIdentifiers(lp(i), rp(i))
+          }.find(_ != 0).getOrElse(0)
+        }
+      }
+    }
+  }
+
+  // (core parts, pre-release); None for an empty version or core.
+  private def parseSemver(version: String): Option[(Array[String], String)] = {
+    val noPrefix = if (version.startsWith("v") || version.startsWith("V")) version.substring(1) else version
+    val v = noPrefix.indexOf('+') match {
+      case -1 => noPrefix
+      case i => noPrefix.substring(0, i)
+    }
+    if (v.isEmpty) None
+    else {
+      val dash = v.indexOf('-')
+      val core = if (dash < 0) v else v.substring(0, dash)
+      val preRelease = if (dash < 0) "" else v.substring(dash + 1)
+      if (core.isEmpty) None else Some((core.split("\\.", -1), preRelease))
+    }
+  }
+
+  private val NumericIdentifier = "^[0-9]+$".r
+
+  private def compareIdentifiers(a: String, b: String): Int = {
+    val aIsNum = NumericIdentifier.matches(a)
+    val bIsNum = NumericIdentifier.matches(b)
+    if (aIsNum && bIsNum) {
+      val aNorm = stripLeadingZeros(a)
+      val bNorm = stripLeadingZeros(b)
+      if (aNorm.length != bNorm.length) (if (aNorm.length > bNorm.length) 1 else -1)
+      else Integer.signum(aNorm.compareTo(bNorm))
+    } else if (aIsNum) -1
+    else if (bIsNum) 1
+    else Integer.signum(a.compareTo(b))
+  }
+
+  private def stripLeadingZeros(s: String): String = {
+    val stripped = s.dropWhile(_ == '0')
+    if (stripped.isEmpty) "0" else stripped
   }
 
   // Invalid patterns yield null; resource-limit rejections and deadlines yield false.
