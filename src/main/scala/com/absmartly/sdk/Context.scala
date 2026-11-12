@@ -207,6 +207,28 @@ class Context(
     result.toMap
   }
 
+  /**
+   * The non-empty `application` and `environment` names from the SDK client
+   * config. The collector attaches the same values to every exposure
+   * server-side, so audience filters can target them. Empty or unset names are
+   * left out rather than set to "" or null.
+   *
+   * Exposed as `private[sdk]` only so tests can simulate a client with no
+   * environment configured; override it to control the system attributes.
+   */
+  private[sdk] def systemAttributes: Map[String, Json] =
+    Context.buildSystemAttributes(sdk.getConfig.application, sdk.getConfig.environment)
+
+  /**
+   * The attribute map audience filters are evaluated against: system values
+   * (`application`, `environment`) first, then the user-set attributes layered
+   * on top so a user value always wins — including one set after the context
+   * was created (the `_attrsSeq` bump invalidates any cached assignment). This
+   * map is used for evaluation only; it is never published.
+   */
+  private def evaluationAttributes(): Map[String, Json] =
+    systemAttributes ++ getAttributes()
+
   // ======================
   // Override Methods
   // ======================
@@ -666,7 +688,7 @@ class Context(
     exp.audience match {
       case Some(aud) if aud.nonEmpty && aud != "null" && aud != "{}" =>
         if (_attrsSeq > assignment.attrsSeq) {
-          val matcher = new AudienceMatcher(getAttributes())
+          val matcher = new AudienceMatcher(evaluationAttributes())
           val newAudienceMismatch = matcher.evaluate(Some(aud)) match {
             case Some(result) => !result
             case None => assignment.audienceMismatch
@@ -724,7 +746,7 @@ class Context(
       if (aud.isEmpty || aud == "null" || aud == "{}") {
         false
       } else {
-        val matcher = new AudienceMatcher(getAttributes())
+        val matcher = new AudienceMatcher(evaluationAttributes())
         matcher.evaluate(Some(aud)) match {
           case Some(result) => !result
           case None => false
@@ -833,6 +855,19 @@ class Context(
 
 object Context {
   private[sdk] def unitText(value: Json): String = value.asString.getOrElse(value.noSpaces)
+
+  /**
+   * Builds the system attribute map (`application`, `environment`) that
+   * audiences are always evaluated against. A null or empty name is skipped so
+   * the key is simply absent rather than evaluating to "" — a filter on a name
+   * with no configured value then does not match.
+   */
+  private[sdk] def buildSystemAttributes(application: String, environment: String): Map[String, Json] = {
+    val builder = Map.newBuilder[String, Json]
+    if (application != null && application.nonEmpty) builder += "application" -> Json.fromString(application)
+    if (environment != null && environment.nonEmpty) builder += "environment" -> Json.fromString(environment)
+    builder.result()
+  }
 
   private[sdk] def errorJson(error: Throwable): Json =
     Json.obj("message" -> Option(error.getMessage).map(Json.fromString).getOrElse(Json.Null))
