@@ -109,7 +109,8 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(h.get("x-application").contains("website"))
     assert(h.get("x-environment").contains("dev"))
     assert(h.get("x-application-version").contains("0"))
-    assert(h.get("x-agent").exists(_.nonEmpty), "X-Agent must be present and non-empty")
+    assert(h.get("x-agent").contains(s"absmartly-scala-sdk/${SdkBuildInfo.version}"))
+    assert(recorded.find(_.method == "GET").get.headers.get("x-agent").contains(Http.Agent))
     assert(h.get("content-type").exists(_.contains("application/json")))
 
     val json = parse(put.get.body).getOrElse(Json.Null)

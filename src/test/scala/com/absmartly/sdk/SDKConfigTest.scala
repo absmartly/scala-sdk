@@ -110,4 +110,11 @@ class SDKConfigTest extends AnyFunSuite {
     )
     assert(config.retries == 0)
   }
+
+  test("X-Agent is absmartly-scala-sdk/<build version>") {
+    val config = SDKConfig("https://test.absmartly.io/v1", "test-api-key-12345", "website", "production")
+    assert(SdkBuildInfo.version.nonEmpty)
+    assert(Http.Agent == s"absmartly-scala-sdk/${SdkBuildInfo.version}")
+    assert(Http.headers(config).get("X-Agent").contains(Http.Agent))
+  }
 }

@@ -2,7 +2,15 @@ name := "absmartly-sdk"
 
 organization := "com.absmartly"
 
-version := "0.2.0"
+// The version comes from the git tag (sbt-dynver via sbt-ci-release): pushing
+// tag v1.2.3 publishes 1.2.3; any other commit builds a -SNAPSHOT version.
+ThisBuild / dynverSeparator := "-"
+ThisBuild / dynverSonatypeSnapshots := true
+
+enablePlugins(BuildInfoPlugin)
+buildInfoKeys := Seq[BuildInfoKey](name, version)
+buildInfoPackage := "com.absmartly.sdk"
+buildInfoObject := "SdkBuildInfo"
 
 // Cross-build for Scala 2.13 and Scala 3
 scalaVersion := "2.13.12"
@@ -10,20 +18,21 @@ crossScalaVersions := Seq("2.13.12", "3.3.1")
 
 // Compiler options
 scalacOptions ++= Seq(
-  "-encoding", "utf8",
+  "-encoding",
+  "utf8",
   "-deprecation",
   "-feature",
   "-unchecked"
 ) ++ (CrossVersion.partialVersion(scalaVersion.value) match {
   case Some((2, 13)) => Seq(
-    "-Xlint",
-    "-Ywarn-dead-code",
-    "-Ywarn-numeric-widen",
-    "-Ywarn-value-discard"
-  )
+      "-Xlint",
+      "-Ywarn-dead-code",
+      "-Ywarn-numeric-widen",
+      "-Ywarn-value-discard"
+    )
   case Some((3, _)) => Seq(
-    "-Xfatal-warnings"
-  )
+      "-Xfatal-warnings"
+    )
   case _ => Seq.empty
 })
 

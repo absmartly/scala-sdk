@@ -26,11 +26,24 @@ sbt test
 sbt +test
 ```
 
+## Releasing
+
+Releases are published to Maven Central by `.github/workflows/release.yml`
+using [sbt-ci-release](https://github.com/sbt/sbt-ci-release). The version comes
+from the git tag (sbt-dynver), so there is no version to bump in `build.sbt`:
+
+- pushing a tag `v1.2.3` publishes `1.2.3`;
+- every push to `main` publishes a `-SNAPSHOT`.
+
+The workflow needs the `PGP_SECRET` (base64 private key), `PGP_PASSPHRASE`,
+`SONATYPE_USERNAME` and `SONATYPE_PASSWORD` (a Central Portal user token)
+repository secrets. The same version is sent in the `X-Agent` header
+(`absmartly-scala-sdk/<version>`).
+
 ## Code Style
 
-- Follow standard Scala style guidelines
-- Use 2-space indentation
-- Maximum line length: 120 characters
+- Code is formatted with scalafmt (`.scalafmt.conf`): run `sbt scalafmtAll scalafmtSbt`
+  before committing; CI runs `sbt scalafmtCheckAll scalafmtSbtCheck`
 - Use meaningful variable names
 - Add scaladoc comments for public APIs
 
