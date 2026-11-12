@@ -4,6 +4,30 @@ All notable changes to the ABsmartly Scala SDK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Assignment rules** (`assignmentRules` on an experiment), matching the JS
+  and Java SDKs. `assign` rules give a fixed variant; `split` rules divide
+  matching units across variants by percentages, hashed with the experiment's
+  seed. Rules can be scoped to environments, and their conditions are JSON
+  expressions evaluated against the same attributes as audiences. The first
+  matching rule wins over audiences, traffic, full-on and custom assignments;
+  only `setOverride()` beats it. Rule assignments are published with the new
+  exposure field `ruleOverride: true`.
+- **Semver operators** for audiences and rule conditions: `semver_eq`,
+  `semver_gt`, `semver_gte`, `semver_lt` and `semver_lte`.
+- **Maven Central publishing** from CI with sbt-ci-release: a `v*` tag publishes
+  that version, pushes to `main` publish snapshots. CI now also checks
+  formatting (scalafmt) and packaging.
+
+### Changed
+
+- `X-Agent` is now `absmartly-scala-sdk/<version>` (was `absmartly-scala-sdk`),
+  with the version taken from the build.
+- The version is derived from git tags (sbt-dynver) instead of `build.sbt`.
+- An audience filter that throws during evaluation now counts as a mismatch, so
+  a strict audience gives variant 0 (it previously counted as no decision).
+
 ### Changed
 
 - **Audiences are now always evaluated with `application` and `environment`.**

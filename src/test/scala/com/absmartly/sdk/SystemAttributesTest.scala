@@ -14,8 +14,7 @@ import scala.concurrent.duration._
  * missing config leaves the key out, `app_version` is never injected, and
  * nothing extra reaches the publish payload.
  *
- * The Scala SDK evaluates audience filters only (it has no assignment-rule
- * `conditions`, which are a newer JS-SDK feature), so §4 test 5 does not apply.
+ * §4 test 5 (assignment-rule conditions) is covered in AssignmentRulesTest.
  */
 class SystemAttributesTest extends AnyFunSuite {
 
