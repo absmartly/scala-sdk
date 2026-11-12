@@ -32,7 +32,8 @@ Releases are published to Maven Central by `.github/workflows/release.yml`
 using [sbt-ci-release](https://github.com/sbt/sbt-ci-release). The version comes
 from the git tag (sbt-dynver), so there is no version to bump in `build.sbt`:
 
-- pushing a tag `v1.2.3` publishes `1.2.3`;
+- pushing a tag `v1.2.3` publishes `1.2.3` (the tagged commit must be on
+  `main`, otherwise the workflow fails without publishing);
 - every push to `main` publishes a `-SNAPSHOT`.
 
 The workflow needs the `PGP_SECRET` (base64 private key), `PGP_PASSPHRASE`,

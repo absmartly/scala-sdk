@@ -94,6 +94,13 @@ class SemverTest extends AnyFunSuite {
     assert(cmp("1.0.0", "v").isEmpty)
   }
 
+  test("parsing is as permissive as the JS and Java SDKs") {
+    assert(cmp("foo", "bar").contains(1))
+    assert(cmp("1.x", "1.0").contains(1))
+    assert(cmp("1..2", "1.0.2").contains(1))
+    assert(cmp("1.0.0-", "1.0.0").contains(0))
+  }
+
   private def eval(expr: String, vars: Map[String, Json] = Map.empty): Json =
     Evaluator.evaluate(parse(expr).toOption.get, vars)
 

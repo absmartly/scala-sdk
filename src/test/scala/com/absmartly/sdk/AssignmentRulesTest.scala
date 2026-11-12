@@ -194,6 +194,20 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(context.peek("exp_test_abc") == 2)
   }
 
+  test("like the JS SDK, an exposed rule assignment is re-evaluated after an attribute change") {
+    // Attribute changes re-evaluate rules (and audiences) even after exposure, as in the JS
+    // SDK; the new variant is exposed once more and then stays cached.
+    val context = contextWith(withRules(assignRule(1)))
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 1)
+    assert(context.treatment("exp_test_abc") == 1)
+    context.setAttribute("country", Json.fromString("GB"))
+    assert(context.treatment("exp_test_abc") == 2)
+    assert(context.treatment("exp_test_abc") == 2)
+    val exposures = publishedExposures(context)
+    assert(exposures.map(e => (e.variant, e.ruleOverride)) == List((1, true), (2, false)))
+  }
+
   test("the cache switches when a different rule starts matching") {
     val context = contextWith(withRules(
       assignRule(1),
@@ -417,6 +431,15 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(RuleAction.parseSplitPercentages("49.99/50").isDefined)
     assert(RuleAction.parseSplitPercentages("20/30/50").contains(List(0.2, 0.3, 0.5)))
     assert(RuleAction.parseSplitPercentages(" 20abc/80").contains(List(0.2, 0.8)))
+  }
+
+  test("non-finite split percentages are malformed, not an error") {
+    assert(RuleAction.parseSplitPercentages("1e309/0").isEmpty)
+    assert(RuleAction.parseSplitPercentages("Infinity/0").isEmpty)
+    assert(RuleAction.parseSplitPercentages("1e308/1e308").isEmpty)
+    val context = contextWith(withRules(splitRule("1e309/0/0"), assignRule(0, "null")))
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 0)
   }
 
   test("a split rule without its unit gives variant 0 and stops, then re-resolves once the unit is set") {

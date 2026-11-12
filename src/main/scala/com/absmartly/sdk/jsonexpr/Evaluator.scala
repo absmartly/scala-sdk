@@ -145,7 +145,9 @@ object Evaluator {
    * ("+...") are ignored, missing core parts count as "0", numeric identifiers
    * compare numerically (and sort before alphanumeric ones), and a release
    * sorts after any of its pre-releases. None when either side is empty or
-   * has no string form.
+   * has no string form. Parsing is as permissive as the JS and Java SDKs', so
+   * all three order the same inputs the same way: a non-numeric part (as in
+   * "1.x" or "abc") is compared as an alphanumeric identifier, not rejected.
    */
   private[sdk] def versionCompare(lhs: Json, rhs: Json): Option[Int] = {
     for {

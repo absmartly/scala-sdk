@@ -126,16 +126,16 @@ object RuleAction {
 
   /**
    * Parse "20/30/50" into [0.2, 0.3, 0.5] like the JS SDK: each value is
-   * `parseFloat(value) / 100` with no normalisation. Non-numeric or negative
-   * values, or a sum more than 0.01 (after rounding to two decimals) from 100,
-   * make the split invalid.
+   * `parseFloat(value) / 100` with no normalisation. Non-numeric, negative or
+   * non-finite values (e.g. "1e309"), or a sum more than 0.01 (after rounding
+   * to two decimals) from 100, make the split invalid.
    */
   private[sdk] def parseSplitPercentages(percentages: String): Option[List[Double]] = {
     val values = percentages.split("/", -1).toList.map {
       case FloatPrefix(num) => num.toDouble
       case _ => Double.NaN
     }
-    if (values.exists(v => v.isNaN || v < 0)) None
+    if (values.exists(v => v.isNaN || v.isInfinite || v < 0) || values.sum.isInfinite) None
     else {
       val gap = new java.math.BigDecimal(math.abs(100 - values.sum)).setScale(2, java.math.RoundingMode.HALF_UP).doubleValue
       if (gap > SplitPercentagesSumTolerance) None else Some(values.map(_ / 100))

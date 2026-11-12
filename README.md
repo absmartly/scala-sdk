@@ -260,9 +260,12 @@ The same values are visible to assignment-rule conditions.
 Audience filters and rule conditions support the semantic-version operators
 `semver_eq`, `semver_gt`, `semver_gte`, `semver_lt` and `semver_lte`, for
 example `{"semver_gte": [{"var": "app_version"}, {"value": "2.4.0"}]}`. A
-leading `v` and build metadata are ignored, missing parts count as `0`, and a
-pre-release sorts before its release. An operand that is not a version makes the
-comparison `null` (no match).
+leading `v` and build metadata are ignored, missing parts count as `0`, numeric
+parts compare numerically, and a pre-release sorts before its release. Like the
+JavaScript and Java SDKs, parsing is permissive: a non-numeric part (as in
+`1.x`) is compared as text, after any numeric one. Only an operand that is
+empty (or empty after removing `v` and build metadata) or has no string form
+(`null`, an array or an object) makes the comparison `null` (no match).
 
 ### Custom Assignments
 
