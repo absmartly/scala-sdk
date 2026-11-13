@@ -40,7 +40,7 @@ class VariantAssigner(hashedUnit: String) {
 
     // Step 4: Calculate probability
     // CRITICAL: Divide by 0xFFFFFFFF (not 0x100000000)
-    val probability = (hash & 0xFFFFFFFFL).toDouble / 0xFFFFFFFFL.toDouble
+    val probability = (hash & 0xffffffffL).toDouble / 0xffffffffL.toDouble
 
     // Step 5: Choose variant
     Utils.chooseVariant(split, probability)

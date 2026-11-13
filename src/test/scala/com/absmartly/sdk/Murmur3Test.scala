@@ -44,10 +44,9 @@ class Murmur3Test extends AnyFunSuite {
   )
 
   testCases.zipWithIndex.foreach { case ((input, seed, expected), idx) =>
-    test(s"murmur3 test case $idx: '${input.take(40)}' with seed 0x${(seed.toLong & 0xFFFFFFFFL).toHexString}") {
+    test(s"murmur3 test case $idx: '${input.take(40)}' with seed 0x${(seed.toLong & 0xffffffffL).toHexString}") {
       val result = Murmur3.hashString(input, seed)
-      assert(result == expected,
-        s"Expected 0x${(expected.toLong & 0xFFFFFFFFL).toHexString}, got 0x${(result.toLong & 0xFFFFFFFFL).toHexString}")
+      assert(result == expected, s"Expected 0x${(expected.toLong & 0xffffffffL).toHexString}, got 0x${(result.toLong & 0xffffffffL).toHexString}")
     }
   }
 }

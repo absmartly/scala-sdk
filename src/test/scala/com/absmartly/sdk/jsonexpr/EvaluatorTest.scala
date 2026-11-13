@@ -314,8 +314,10 @@ class EvaluatorTest extends AnyFunSuite {
   }
 
   test("all binary operators short-circuit either null operand") {
-    for (op <- List("eq", "gt", "gte", "lt", "lte", "in", "contains", "match");
-         operands <- List(Vector(Json.Null, Json.fromString("x")), Vector(Json.fromString("x"), Json.Null))) {
+    for (
+      op <- List("eq", "gt", "gte", "lt", "lte", "in", "contains", "match");
+      operands <- List(Vector(Json.Null, Json.fromString("x")), Vector(Json.fromString("x"), Json.Null))
+    ) {
       val expr = Json.obj(op -> Json.fromValues(operands.map(v => Json.obj("value" -> v))))
       assert(Evaluator.evaluate(expr, vars) == Json.Null, s"$op: $operands")
     }

@@ -6,7 +6,7 @@ import io.circe.generic.semiauto._
 /**
  * SDK Configuration
  */
-case class SDKConfig private(
+case class SDKConfig private (
   endpoint: String,
   apiKey: String,
   application: String,
@@ -19,7 +19,7 @@ case class SDKConfig private(
   override def toString: String = {
     val maskedKey = if (apiKey.length > 4) s"***${apiKey.takeRight(4)}" else "***"
     s"SDKConfig(endpoint=$endpoint, apiKey=$maskedKey, " +
-    s"application=$application, environment=$environment, retries=$retries, timeout=$timeout)"
+      s"application=$application, environment=$environment, retries=$retries, timeout=$timeout)"
   }
 }
 
@@ -64,7 +64,8 @@ case class ExperimentData(
   variants: List[ExperimentVariant],
   audienceStrict: Boolean = false,
   audience: Option[String] = None,
-  customFieldValues: Option[List[CustomFieldValue]] = None
+  customFieldValues: Option[List[CustomFieldValue]] = None,
+  assignmentRules: Option[String] = None
 )
 
 case class CustomFieldValue(
@@ -107,10 +108,43 @@ object ExperimentData {
       audienceStrict <- c.downField("audienceStrict").as[Option[Boolean]].map(_.getOrElse(false))
       audience <- c.downField("audience").as[Option[String]]
       customFieldValues <- c.downField("customFieldValues").as[Option[List[CustomFieldValue]]]
-    } yield ExperimentData(id, name, unitType, iteration, seedHi, seedLo, split,
-      trafficSeedHi, trafficSeedLo, trafficSplit, fullOnVariant, applications, variants,
-      audienceStrict, audience, customFieldValues)
+    } yield ExperimentData(
+      id,
+      name,
+      unitType,
+      iteration,
+      seedHi,
+      seedLo,
+      split,
+      trafficSeedHi,
+      trafficSeedLo,
+      trafficSplit,
+      fullOnVariant,
+      applications,
+      variants,
+      audienceStrict,
+      audience,
+      customFieldValues,
+      decodeAssignmentRules(name, c.downField("assignmentRules").focus)
+    )
   }
+
+  /**
+   * `assignmentRules` is sent as a JSON string. An object or array in its place
+   * only drops that experiment's rules (with a warning) rather than failing the
+   * whole context; other scalars are kept in their string form.
+   */
+  private def decodeAssignmentRules(experimentName: String, value: Option[Json]): Option[String] =
+    value.filterNot(_.isNull).flatMap { json =>
+      if (json.isObject || json.isArray) {
+        Logger.safe.warn(
+          s"Ignoring assignmentRules for experiment '${Logger.sanitize(experimentName, 100)}': expected a JSON string"
+        )
+        None
+      } else {
+        Some(json.asString.getOrElse(json.noSpaces))
+      }
+    }
   implicit val encoder: Encoder[ExperimentData] = deriveEncoder
 }
 
@@ -144,7 +178,14 @@ case class Assignment(
   audienceMismatch: Boolean,
   fullOn: Boolean,
   custom: Boolean,
-  attrsSeq: Int = 0
+  attrsSeq: Int = 0,
+  ruleOverride: Boolean = false,
+  // The variant the assignment rules resolved to when this was built (None: no rule matched).
+  ruleVariant: Option[Int] = None,
+  // The rules and environment this was resolved against; a change re-evaluates the rules.
+  ruleKey: String = "",
+  // A split rule matched while the experiment's unit was not set.
+  ruleMissingUnit: Boolean = false
 )
 
 /**
@@ -161,7 +202,8 @@ case class Exposure(
   overridden: Boolean,
   fullOn: Boolean,
   custom: Boolean,
-  audienceMismatch: Boolean
+  audienceMismatch: Boolean,
+  ruleOverride: Boolean = false
 )
 
 object Exposure {
