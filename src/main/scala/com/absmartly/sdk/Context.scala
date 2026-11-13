@@ -272,7 +272,9 @@ class Context(
 
   def setCustomAssignment(experimentName: String, variant: Int): Unit = lock.synchronized {
     _cassignments(experimentName) = variant
-    _assignments.remove(experimentName)
+    // A matching rule wins over a custom assignment: keep a rule-won assignment so
+    // revalidate re-checks its rule, rather than rebuilding it and exposing it again.
+    if (!_assignments.get(experimentName).exists(_.ruleOverride)) _assignments.remove(experimentName)
     logger.debug(s"Custom assignment '$experimentName' = $variant")
   }
 

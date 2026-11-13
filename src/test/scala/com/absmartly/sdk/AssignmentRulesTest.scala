@@ -149,6 +149,15 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(context.treatment("exp_test_abc") == 2)
   }
 
+  test("setting a custom assignment after a rule-won exposure does not expose again") {
+    val context = contextWith(withRules(assignRule(1)))
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 1)
+    context.setCustomAssignment("exp_test_abc", 2)
+    assert(context.treatment("exp_test_abc") == 1)
+    assert(context.pending() == 1)
+  }
+
   test("a rule wins over a strict audience mismatch and leaves audienceMismatch false") {
     val exp = withRules(assignRule(1)).copy(
       audienceStrict = true,
