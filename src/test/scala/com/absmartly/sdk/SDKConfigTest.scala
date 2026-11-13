@@ -117,4 +117,22 @@ class SDKConfigTest extends AnyFunSuite {
     assert(Http.Agent == s"absmartly-scala-sdk/${SdkBuildInfo.version}")
     assert(Http.headers(config).get("X-Agent").contains(Http.Agent))
   }
+
+  // Cross-SDK scenarios 320/321: X-Agent is always absmartly-scala-sdk/<semver>,
+  // on the context GET and the publish PUT alike, however the SDK was built.
+  private val AgentPattern = "^absmartly-[a-z0-9]+-sdk/[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]*)?$"
+
+  test("X-Agent is semver even when the build has no git metadata") {
+    // sbt-dynver's fallback when built from a copy without .git or tags.
+    assert(Http.agent("HEAD-20261113-1638") == "absmartly-scala-sdk/0.0.0-SNAPSHOT")
+    assert(Http.agent("") == "absmartly-scala-sdk/0.0.0-SNAPSHOT")
+    assert(Http.agent("HEAD-20261113-1638").matches(AgentPattern))
+  }
+
+  test("X-Agent keeps a semver build version") {
+    assert(Http.agent("1.2.3") == "absmartly-scala-sdk/1.2.3")
+    assert(Http.agent("1.2.3-4-abcdef12-SNAPSHOT") == "absmartly-scala-sdk/1.2.3-4-abcdef12-SNAPSHOT")
+    assert(Http.agent("0.0.0+3-abcdef12") == "absmartly-scala-sdk/0.0.0+3-abcdef12")
+    assert(Http.Agent.matches(AgentPattern))
+  }
 }

@@ -111,6 +111,10 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(h.get("x-application-version").contains("0"))
     assert(h.get("x-agent").contains(s"absmartly-scala-sdk/${SdkBuildInfo.version}"))
     assert(recorded.find(_.method == "GET").get.headers.get("x-agent").contains(Http.Agent))
+    // Cross-SDK scenarios 320/321: both requests carry absmartly-scala-sdk/<semver>.
+    val agentPattern = "^absmartly-[a-z0-9]+-sdk/[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]*)?$"
+    assert(get.get.headers.get("x-agent").exists(_.matches(agentPattern)), get.get.headers.get("x-agent"))
+    assert(h.get("x-agent").exists(_.matches(agentPattern)), h.get("x-agent"))
     assert(h.get("content-type").exists(_.contains("application/json")))
 
     val json = parse(put.get.body).getOrElse(Json.Null)

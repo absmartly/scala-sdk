@@ -6,6 +6,13 @@ organization := "com.absmartly"
 // tag v1.2.3 publishes 1.2.3; any other commit builds a -SNAPSHOT version.
 ThisBuild / dynverSeparator := "-"
 ThisBuild / dynverSonatypeSnapshots := true
+// Without git metadata or tags (e.g. a source copy) dynver falls back to
+// HEAD-<date>, which is not semver; use 0.0.0-SNAPSHOT so the version (and the
+// X-Agent header built from it) is always semver. Tagged releases are unaffected.
+ThisBuild / version := {
+  val v = (ThisBuild / version).value
+  if (v.matches("""[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?""")) v else "0.0.0-SNAPSHOT"
+}
 
 enablePlugins(BuildInfoPlugin)
 buildInfoKeys := Seq[BuildInfoKey](name, version)
