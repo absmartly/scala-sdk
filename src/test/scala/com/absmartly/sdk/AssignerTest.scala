@@ -61,12 +61,16 @@ class AssignerTest extends AnyFunSuite {
   )
 
   canonicalTestCases.zipWithIndex.foreach { case ((unit, split, seedHi, seedLo, expected), idx) =>
-    test(s"assign canonical case $idx: unit='${unit.take(20)}' split=${split.mkString(",")} seeds=0x${Integer.toHexString(seedHi)}:0x${Integer.toHexString(seedLo)}") {
+    test(
+      s"assign canonical case $idx: unit='${unit.take(20)}' split=${split.mkString(",")} seeds=0x${Integer.toHexString(seedHi)}:0x${Integer.toHexString(seedLo)}"
+    ) {
       val hashedUnit = Utils.hashUnit(unit)
       val assigner = new VariantAssigner(hashedUnit)
       val variant = assigner.assign(split, seedHi, seedLo)
-      assert(variant == expected,
-        s"Expected variant $expected, got $variant for unit='$unit', split=$split, seedHi=0x${Integer.toHexString(seedHi)}, seedLo=0x${Integer.toHexString(seedLo)}")
+      assert(
+        variant == expected,
+        s"Expected variant $expected, got $variant for unit='$unit', split=$split, seedHi=0x${Integer.toHexString(seedHi)}, seedLo=0x${Integer.toHexString(seedLo)}"
+      )
     }
   }
 }

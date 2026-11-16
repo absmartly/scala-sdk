@@ -49,8 +49,8 @@ class Context(
   private val _exposures: mutable.ListBuffer[Exposure] = mutable.ListBuffer()
   private val _goals: mutable.ListBuffer[Goal] = mutable.ListBuffer()
 
-  // Assignment cache
-  private val _assignments: mutable.Map[String, Assignment] = mutable.Map()
+  // Assignment cache, with the assignment-rule state each entry was resolved with
+  private val _assignments: mutable.Map[String, Context.Cached] = mutable.Map()
 
   // Experiment indices
   private var _index: Map[String, ExperimentData] = Map.empty
@@ -58,6 +58,15 @@ class Context(
 
   // Assigners for each unit type
   private val _assigners: mutable.Map[String, VariantAssigner] = mutable.Map()
+
+  // Parsed `assignmentRules` per experiment, filled on first use and cleared on every data install
+  private val _parsedRules: mutable.Map[String, Option[List[Json]]] = mutable.Map()
+
+  // Per experiment with rules: the rules and environment installed, and a generation number that
+  // changes only when those change. Computed once per data install so cached reads compare a Long.
+  private var _ruleIdentities: Map[String, (String, String)] = Map.empty
+  private var _ruleGenerations: Map[String, Long] = Map.empty
+  private var _lastRuleGeneration: Long = 0L
 
   // Attribute sequence counter for audience re-evaluation
   private var _attrsSeq: Int = 0
@@ -152,10 +161,23 @@ class Context(
       case _ =>
         _units(unitType) = value
         _assigners.remove(unitType)
+        _invalidateRulesResolvedWithoutUnit(unitType)
         val text = Context.unitText(value)
         val maskedUid = if (text.length > 4) s"***${text.takeRight(4)}" else "***"
         logger.debug(s"Set unit '$unitType' = $maskedUid")
     }
+  }
+
+  /**
+   * A split rule that matched while its unit was missing gave the experiment's
+   * no-unit variant. Once the unit is set those assignments are rebuilt, except
+   * exposed ones: re-resolving them would queue a second, conflicting exposure.
+   */
+  private def _invalidateRulesResolvedWithoutUnit(unitType: String): Unit = {
+    val stale = _assignments.collect {
+      case (name, c) if c.assignment.unitType == unitType && !c.assignment.exposed && c.rule.missingUnit => name
+    }
+    stale.foreach(_assignments.remove)
   }
 
   def setUnits(units: Map[String, String]): Unit = {
@@ -207,6 +229,35 @@ class Context(
     result.toMap
   }
 
+  /**
+   * The non-empty `application` and `environment` names from the SDK client
+   * config. The collector attaches the same values to every exposure
+   * server-side, so audience filters can target them. Empty or unset names are
+   * left out rather than set to "" or null.
+   *
+   * Exposed as `private[sdk]` only so tests can simulate a client with no
+   * environment configured; override it to control the system attributes.
+   */
+  private[sdk] def systemAttributes: Map[String, Json] =
+    Context.buildSystemAttributes(sdk.getConfig.application, sdk.getConfig.environment)
+
+  /**
+   * The attribute map audience filters are evaluated against: system values
+   * (`application`, `environment`) first, then the user-set attributes layered
+   * on top so a user value always wins — including one set after the context
+   * was created (the `_attrsSeq` bump invalidates any cached assignment). This
+   * map is used for evaluation only; it is never published.
+   */
+  private def evaluationAttributes(): Map[String, Json] =
+    systemAttributes ++ getAttributes()
+
+  /**
+   * The environment environment-scoped assignment rules are matched against.
+   * `private[sdk]` so tests can simulate a client with no environment.
+   */
+  private[sdk] def environmentName: Option[String] =
+    Option(sdk.getConfig.environment).filter(_.nonEmpty)
+
   // ======================
   // Override Methods
   // ======================
@@ -227,7 +278,9 @@ class Context(
 
   def setCustomAssignment(experimentName: String, variant: Int): Unit = lock.synchronized {
     _cassignments(experimentName) = variant
-    _assignments.remove(experimentName)
+    // A matching rule wins over a custom assignment: keep a rule-won assignment so
+    // revalidate re-checks its rule, rather than rebuilding it and exposing it again.
+    if (!_assignments.get(experimentName).exists(_.rule.ruleOverride)) _assignments.remove(experimentName)
     logger.debug(s"Custom assignment '$experimentName' = $variant")
   }
 
@@ -241,14 +294,14 @@ class Context(
 
   def treatment(experimentName: String): Int = lock.synchronized {
     checkReady(expectNotFinalized = true)
-    val assignment = _assign(experimentName)
-    _queueExposure(assignment)
-    assignment.variant
+    val cached = _assign(experimentName)
+    _queueExposure(cached)
+    cached.assignment.variant
   }
 
   def peek(experimentName: String): Int = lock.synchronized {
     checkReady(expectNotFinalized = true)
-    _assign(experimentName).variant
+    _assign(experimentName).assignment.variant
   }
 
   // ======================
@@ -272,6 +325,9 @@ class Context(
     }
   }
 
+  // ======================
+  // Custom Fields Methods
+  // ======================
 
   def customFieldValue(experimentName: String, fieldName: String): Option[Json] = lock.synchronized {
     checkReady(expectNotFinalized = true)
@@ -330,13 +386,16 @@ class Context(
 
     _goals += goal
 
-    safeLog("goal", Json.obj(
-      "name" -> Json.fromString(goal.name),
-      "achievedAt" -> Json.fromLong(goal.achievedAt),
-      "properties" -> goal.properties.map(p =>
-        Json.obj(p.toSeq: _*)
-      ).getOrElse(Json.Null)
-    ))
+    safeLog(
+      "goal",
+      Json.obj(
+        "name" -> Json.fromString(goal.name),
+        "achievedAt" -> Json.fromLong(goal.achievedAt),
+        "properties" -> goal.properties.map(p =>
+          Json.obj(p.toSeq: _*)
+        ).getOrElse(Json.Null)
+      )
+    )
 
     logger.debug(s"Tracked goal '$goalName' with ${properties.map(_.size).getOrElse(0)} properties")
   }
@@ -544,6 +603,8 @@ class Context(
     }
 
     _index = parsedExperiments.map(exp => exp.name -> exp).toMap
+    _parsedRules.clear()
+    _installRuleGenerations(parsedExperiments)
 
     val varIndex = mutable.Map[String, mutable.ListBuffer[ExperimentData]]()
     parsedExperiments.foreach { exp =>
@@ -560,131 +621,230 @@ class Context(
     _indexVariables = varIndex.map { case (k, v) => k -> v.toList }.toMap
   }
 
-  private def _assign(experimentName: String): Assignment = {
+  private def _installRuleGenerations(experiments: List[ExperimentData]): Unit = {
+    val environment = environmentName.getOrElse("")
+    val identities = experiments.flatMap { exp =>
+      exp.assignmentRules.filter(_.nonEmpty).map(rules => exp.name -> ((rules, environment)))
+    }.toMap
+    _ruleGenerations = identities.map { case (name, identity) =>
+      name -> (if (_ruleIdentities.get(name).contains(identity)) _ruleGenerations(name)
+               else { _lastRuleGeneration += 1; _lastRuleGeneration })
+    }
+    _ruleIdentities = identities
+  }
+
+  /** The generation of the experiment's installed rules; 0 when it has none. */
+  private def ruleGeneration(exp: ExperimentData): Long =
+    if (hasRules(exp)) _ruleGenerations.getOrElse(exp.name, 0L) else 0L
+
+  private def _assign(experimentName: String): Context.Cached = {
     val hasOverride = _overrides.contains(experimentName)
     val hasCustom = _cassignments.contains(experimentName)
     val experiment = _index.get(experimentName)
 
     _assignments.get(experimentName) match {
-      case Some(assignment) if isAssignmentValid(assignment, experiment, hasOverride, hasCustom) =>
-        return assignment
-      case _ =>
+      case Some(cached) =>
+        revalidate(cached, experiment, hasOverride, hasCustom) match {
+          case Some(valid) =>
+            if (valid ne cached) _assignments(experimentName) = valid
+            return valid
+          case None =>
+        }
+      case None =>
     }
 
-    val assignment = experiment match {
+    val cached = experiment match {
       case Some(exp) if hasOverride =>
-        createAssignmentRaw(exp, _overrides(experimentName), assigned = false, eligible = true,
-          audienceMismatch = false, fullOn = false, custom = false, overridden = true)
+        Context.Cached(
+          createAssignmentRaw(
+            exp,
+            _overrides(experimentName),
+            assigned = false,
+            eligible = true,
+            audienceMismatch = false,
+            fullOn = false,
+            custom = false,
+            overridden = true
+          ),
+          Context.RuleState.NoRules
+        )
 
-      case Some(exp) =>
-        val audienceMismatch = checkAudienceMismatch(exp)
+      case Some(exp) if hasRules(exp) =>
+        val rule = resolveRule(exp, isUnitPinnedMissing = false)
+        val ruleState = (ruleOverride: Boolean) =>
+          Context.RuleState(ruleOverride, rule.map(_._1), ruleGeneration(exp), rule.exists(_._2))
 
-        if (exp.audienceStrict && audienceMismatch) {
-          createAssignmentRaw(exp, 0, assigned = false, eligible = true,
-            audienceMismatch = true, fullOn = false, custom = false)
-        } else if (exp.fullOnVariant == 0) {
-          _units.get(exp.unitType) match {
-            case Some(_) =>
-              val assigner = getOrCreateAssigner(exp.unitType)
-              val eligible = assigner.assign(exp.trafficSplit, exp.trafficSeedHi, exp.trafficSeedLo) == 1
-
-              if (eligible) {
-                if (hasCustom) {
-                  createAssignmentRaw(exp, _cassignments(experimentName), assigned = true, eligible = true,
-                    audienceMismatch = audienceMismatch, fullOn = false, custom = true)
-                } else {
-                  val variant = assigner.assign(exp.split, exp.seedHi, exp.seedLo)
-                  createAssignmentRaw(exp, variant, assigned = true, eligible = true,
-                    audienceMismatch = audienceMismatch, fullOn = false, custom = false)
-                }
-              } else {
-                createAssignmentRaw(exp, 0, assigned = true, eligible = false,
-                  audienceMismatch = audienceMismatch, fullOn = false, custom = false)
-              }
-            case None =>
-              createAssignmentRaw(exp, 0, assigned = true, eligible = false,
-                audienceMismatch = audienceMismatch, fullOn = false, custom = false)
-          }
-        } else {
-          createAssignmentRaw(exp, exp.fullOnVariant, assigned = true, eligible = true,
-            audienceMismatch = audienceMismatch, fullOn = true, custom = false)
+        rule match {
+          // A matching rule wins over audience, traffic, full-on and custom
+          // assignment; only an override beats it.
+          case Some((variant, _)) =>
+            Context.Cached(
+              createAssignmentRaw(exp, variant, assigned = false, eligible = true, audienceMismatch = false, fullOn = false, custom = false),
+              ruleState(true)
+            )
+          case None => Context.Cached(assignWithoutRule(exp, hasCustom), ruleState(false))
         }
+
+      case Some(exp) => Context.Cached(assignWithoutRule(exp, hasCustom), Context.RuleState.NoRules)
 
       case None =>
         val variant = if (hasOverride) _overrides(experimentName) else 0
-        Assignment(
-          id = 0,
-          name = experimentName,
-          unitType = "",
-          iteration = 0,
-          trafficSplit = List.empty,
-          fullOnVariant = 0,
-          variant = variant,
-          assigned = false,
-          exposed = false,
-          eligible = true,
-          overridden = hasOverride,
-          audienceMismatch = false,
-          fullOn = false,
-          custom = hasCustom,
-          attrsSeq = _attrsSeq
+        Context.Cached(
+          Assignment(
+            id = 0,
+            name = experimentName,
+            unitType = "",
+            iteration = 0,
+            trafficSplit = List.empty,
+            fullOnVariant = 0,
+            variant = variant,
+            assigned = false,
+            exposed = false,
+            eligible = true,
+            overridden = hasOverride,
+            audienceMismatch = false,
+            fullOn = false,
+            custom = hasCustom,
+            attrsSeq = _attrsSeq
+          ),
+          Context.RuleState.NoRules
         )
     }
 
-    _assignments(experimentName) = assignment
-    assignment
+    _assignments(experimentName) = cached
+    cached
   }
 
-  private def isAssignmentValid(
-    assignment: Assignment,
+  private def assignWithoutRule(exp: ExperimentData, hasCustom: Boolean): Assignment = {
+    val audienceMismatch = checkAudienceMismatch(exp)
+
+    if (exp.audienceStrict && audienceMismatch) {
+      createAssignmentRaw(exp, 0, assigned = false, eligible = true, audienceMismatch = true, fullOn = false, custom = false)
+    } else if (exp.fullOnVariant == 0) {
+      _units.get(exp.unitType) match {
+        case Some(_) =>
+          val assigner = getOrCreateAssigner(exp.unitType)
+          val eligible = assigner.assign(exp.trafficSplit, exp.trafficSeedHi, exp.trafficSeedLo) == 1
+
+          if (eligible) {
+            if (hasCustom) {
+              createAssignmentRaw(
+                exp,
+                _cassignments(exp.name),
+                assigned = true,
+                eligible = true,
+                audienceMismatch = audienceMismatch,
+                fullOn = false,
+                custom = true
+              )
+            } else {
+              val variant = assigner.assign(exp.split, exp.seedHi, exp.seedLo)
+              createAssignmentRaw(exp, variant, assigned = true, eligible = true, audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+            }
+          } else {
+            createAssignmentRaw(exp, 0, assigned = true, eligible = false, audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+          }
+        case None =>
+          createAssignmentRaw(exp, 0, assigned = true, eligible = false, audienceMismatch = audienceMismatch, fullOn = false, custom = false)
+      }
+    } else {
+      createAssignmentRaw(exp, exp.fullOnVariant, assigned = true, eligible = true, audienceMismatch = audienceMismatch, fullOn = true, custom = false)
+    }
+  }
+
+  /** Parses an experiment's `assignmentRules`; `private[sdk]` so tests can count parses. */
+  private[sdk] def parseRules(assignmentRules: String): Option[List[Json]] = AudienceMatcher.parseRules(assignmentRules)
+
+  private def hasRules(exp: ExperimentData): Boolean = exp.assignmentRules.exists(_.nonEmpty)
+
+  /**
+   * The variant the experiment's assignment rules give, and whether it was
+   * resolved without the experiment's unit. None when no rule matches, when an
+   * assign rule's variant is out of bounds, or when a split rule's share count
+   * differs from the variant count (both stop rule evaluation, as in the JS SDK).
+   * `private[sdk]` so tests can count rule evaluations.
+   * A split rule is hashed with the experiment's own seed; without the unit it
+   * gives the experiment's no-unit result (the full-on variant, else 0).
+   */
+  private[sdk] def resolveRule(exp: ExperimentData, isUnitPinnedMissing: Boolean): Option[(Int, Boolean)] = {
+    val rules = _parsedRules.getOrElseUpdate(exp.name, exp.assignmentRules.flatMap(parseRules))
+    rules.flatMap(new AudienceMatcher(evaluationAttributes()).evaluateRules(_, environmentName)).flatMap {
+      case RuleAction.Assign(variant) =>
+        if (variant >= 0 && variant < exp.variants.length) Some((variant, false)) else None
+      case RuleAction.Split(split) =>
+        if (split.length != exp.variants.length) None
+        else if (isUnitPinnedMissing || !_units.contains(exp.unitType)) Some((exp.fullOnVariant, true))
+        else Some((getOrCreateAssigner(exp.unitType).assign(split, exp.seedHi, exp.seedLo), false))
+    }
+  }
+
+  /**
+   * The cached entry if it is still valid: the same instance when nothing changed,
+   * or a refreshed copy after a same-outcome re-evaluation. None when it must be rebuilt.
+   */
+  private def revalidate(
+    cached: Context.Cached,
     experiment: Option[ExperimentData],
     hasOverride: Boolean,
     hasCustom: Boolean
-  ): Boolean = {
+  ): Option[Context.Cached] = {
+    val assignment = cached.assignment
     if (hasOverride) {
-      assignment.overridden && assignment.variant == _overrides(assignment.name)
+      Some(cached).filter(_ => assignment.overridden && assignment.variant == _overrides(assignment.name))
     } else {
       experiment match {
         case Some(exp) =>
+          // A matching rule wins over a custom assignment, so a custom mismatch is not staleness.
           val baseValid = assignment.id == exp.id &&
             assignment.unitType == exp.unitType &&
             assignment.iteration == exp.iteration &&
             assignment.fullOnVariant == exp.fullOnVariant &&
             assignment.trafficSplit == exp.trafficSplit &&
-            (!hasCustom || _cassignments(assignment.name) == assignment.variant)
-          baseValid && audienceMatches(exp, assignment)
+            (cached.rule.ruleOverride || !hasCustom || _cassignments(assignment.name) == assignment.variant)
+          if (baseValid) audienceAndRulesMatch(exp, cached) else None
         case None =>
-          !assignment.assigned
+          // A rule-won assignment came from the experiment's rules, so it is rebuilt once the experiment is gone.
+          Some(cached).filter(_ => !assignment.assigned && !cached.rule.ruleOverride)
       }
+    }
+  }
+
+  private def audienceAndRulesMatch(exp: ExperimentData, cached: Context.Cached): Option[Context.Cached] = {
+    val generation = ruleGeneration(exp)
+    val rulesChanged = generation != cached.rule.generation
+
+    if (rulesChanged && generation == 0L && (cached.rule.variant.isDefined || cached.rule.ruleOverride)) {
+      None
+    } else if (_attrsSeq > cached.assignment.attrsSeq || rulesChanged) {
+      val withRules =
+        if (generation != 0L) {
+          // An exposed split resolved without its unit keeps resolving as if the unit were
+          // still missing, so a unit set afterwards cannot switch the variant already seen.
+          val rule = resolveRule(exp, isUnitPinnedMissing = cached.assignment.exposed && cached.rule.missingUnit)
+          if (rule.map(_._1) != cached.rule.variant) None
+          else Some(cached.rule.copy(variant = rule.map(_._1), missingUnit = rule.exists(_._2), generation = generation))
+        } else {
+          Some(cached.rule.copy(generation = generation))
+        }
+
+      withRules.filter(r => r.ruleOverride || audienceMatches(exp, cached.assignment))
+        .map(r => Context.Cached(cached.assignment.copy(attrsSeq = _attrsSeq), r))
+    } else {
+      Some(cached)
     }
   }
 
   private def audienceMatches(exp: ExperimentData, assignment: Assignment): Boolean = {
     exp.audience match {
       case Some(aud) if aud.nonEmpty && aud != "null" && aud != "{}" =>
-        if (_attrsSeq > assignment.attrsSeq) {
-          val matcher = new AudienceMatcher(getAttributes())
-          val newAudienceMismatch = matcher.evaluate(Some(aud)) match {
-            case Some(result) => !result
-            case None => assignment.audienceMismatch
-          }
-          newAudienceMismatch == assignment.audienceMismatch
-        } else {
-          true
+        val matcher = new AudienceMatcher(evaluationAttributes())
+        val newAudienceMismatch = matcher.evaluate(Some(aud)) match {
+          case Some(result) => !result
+          case None => assignment.audienceMismatch
         }
+        newAudienceMismatch == assignment.audienceMismatch
       case _ => true
     }
-  }
-
-  private def createAssignment(
-    exp: ExperimentData,
-    variant: Int,
-    overridden: Boolean = false
-  ): Assignment = {
-    val audienceMismatch = checkAudienceMismatch(exp)
-    createAssignmentRaw(exp, variant, assigned = true, eligible = true,
-      audienceMismatch = audienceMismatch, fullOn = false, custom = false,
-      overridden = overridden)
   }
 
   private def createAssignmentRaw(
@@ -721,7 +881,7 @@ class Context(
       if (aud.isEmpty || aud == "null" || aud == "{}") {
         false
       } else {
-        val matcher = new AudienceMatcher(getAttributes())
+        val matcher = new AudienceMatcher(evaluationAttributes())
         matcher.evaluate(Some(aud)) match {
           case Some(result) => !result
           case None => false
@@ -731,9 +891,11 @@ class Context(
   }
 
   private def getOrCreateAssigner(unitType: String): VariantAssigner = {
-    _assigners.getOrElseUpdate(unitType, {
-      new VariantAssigner(_unitHash(unitType))
-    })
+    _assigners.getOrElseUpdate(
+      unitType, {
+        new VariantAssigner(_unitHash(unitType))
+      }
+    )
   }
 
   private def _variableValue(key: String, defaultValue: String, queueExposure: Boolean): String = {
@@ -743,10 +905,11 @@ class Context(
         var result: Option[String] = None
 
         experiments.reverse.foreach { exp =>
-          val assignment = _assign(exp.name)
+          val cached = _assign(exp.name)
           if (queueExposure) {
-            _queueExposure(assignment)
+            _queueExposure(cached)
           }
+          val assignment = cached.assignment
 
           if (result.isEmpty && assignment.variant > 0) {
             exp.variants.lift(assignment.variant).flatMap(_.config).foreach { config =>
@@ -763,9 +926,10 @@ class Context(
     }
   }
 
-  private def _queueExposure(assignment: Assignment): Unit = {
+  private def _queueExposure(cached: Context.Cached): Unit = {
+    val assignment = cached.assignment
     if (!assignment.exposed) {
-      _assignments(assignment.name) = assignment.copy(exposed = true)
+      _assignments(assignment.name) = cached.copy(assignment = assignment.copy(exposed = true))
 
       val exposure = Exposure(
         id = assignment.id,
@@ -778,24 +942,29 @@ class Context(
         overridden = assignment.overridden,
         fullOn = assignment.fullOn,
         custom = assignment.custom,
-        audienceMismatch = assignment.audienceMismatch
+        audienceMismatch = assignment.audienceMismatch,
+        ruleOverride = cached.rule.ruleOverride
       )
 
       _exposures += exposure
 
-      safeLog("exposure", Json.obj(
-        "id" -> Json.fromInt(exposure.id),
-        "name" -> Json.fromString(exposure.name),
-        "unit" -> (if (exposure.unit.isEmpty) Json.Null else Json.fromString(exposure.unit)),
-        "variant" -> Json.fromInt(exposure.variant),
-        "exposedAt" -> Json.fromLong(exposure.exposedAt),
-        "assigned" -> Json.fromBoolean(exposure.assigned),
-        "eligible" -> Json.fromBoolean(exposure.eligible),
-        "overridden" -> Json.fromBoolean(exposure.overridden),
-        "fullOn" -> Json.fromBoolean(exposure.fullOn),
-        "custom" -> Json.fromBoolean(exposure.custom),
-        "audienceMismatch" -> Json.fromBoolean(exposure.audienceMismatch)
-      ))
+      safeLog(
+        "exposure",
+        Json.obj(
+          "id" -> Json.fromInt(exposure.id),
+          "name" -> Json.fromString(exposure.name),
+          "unit" -> (if (exposure.unit.isEmpty) Json.Null else Json.fromString(exposure.unit)),
+          "variant" -> Json.fromInt(exposure.variant),
+          "exposedAt" -> Json.fromLong(exposure.exposedAt),
+          "assigned" -> Json.fromBoolean(exposure.assigned),
+          "eligible" -> Json.fromBoolean(exposure.eligible),
+          "overridden" -> Json.fromBoolean(exposure.overridden),
+          "fullOn" -> Json.fromBoolean(exposure.fullOn),
+          "custom" -> Json.fromBoolean(exposure.custom),
+          "audienceMismatch" -> Json.fromBoolean(exposure.audienceMismatch),
+          "ruleOverride" -> Json.fromBoolean(exposure.ruleOverride)
+        )
+      )
     }
   }
 
@@ -829,7 +998,37 @@ class Context(
 }
 
 object Context {
+
+  /**
+   * Assignment-rule state of a cached assignment, kept out of the public `Assignment`.
+   *
+   * @param ruleOverride whether a rule gave the variant
+   * @param variant      the variant the rules resolved to (None: no rule matched)
+   * @param generation   the rule generation it was resolved against (0: no rules); a change re-evaluates
+   * @param missingUnit  a split rule matched while the experiment's unit was not set
+   */
+  private[sdk] final case class RuleState(ruleOverride: Boolean, variant: Option[Int], generation: Long, missingUnit: Boolean)
+
+  private[sdk] object RuleState {
+    val NoRules: RuleState = RuleState(ruleOverride = false, variant = None, generation = 0L, missingUnit = false)
+  }
+
+  private[sdk] final case class Cached(assignment: Assignment, rule: RuleState)
+
   private[sdk] def unitText(value: Json): String = value.asString.getOrElse(value.noSpaces)
+
+  /**
+   * Builds the system attribute map (`application`, `environment`) that
+   * audiences are always evaluated against. A null or empty name is skipped so
+   * the key is simply absent rather than evaluating to "" — a filter on a name
+   * with no configured value then does not match.
+   */
+  private[sdk] def buildSystemAttributes(application: String, environment: String): Map[String, Json] = {
+    val builder = Map.newBuilder[String, Json]
+    if (application != null && application.nonEmpty) builder += "application" -> Json.fromString(application)
+    if (environment != null && environment.nonEmpty) builder += "environment" -> Json.fromString(environment)
+    builder.result()
+  }
 
   private[sdk] def errorJson(error: Throwable): Json =
     Json.obj("message" -> Option(error.getMessage).map(Json.fromString).getOrElse(Json.Null))

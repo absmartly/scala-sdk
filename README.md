@@ -17,7 +17,7 @@ The ABsmartly Scala SDK is compatible with Scala 2.13+ and Scala 3. It provides 
 Add this to your `build.sbt`:
 
 ```scala
-libraryDependencies += "com.absmartly" %% "absmartly-sdk" % "0.2.0"
+libraryDependencies += "com.absmartly" %% "absmartly-sdk" % "0.3.0"
 ```
 
 ### Maven
@@ -28,14 +28,14 @@ Add this to your `pom.xml`:
 <dependency>
   <groupId>com.absmartly</groupId>
   <artifactId>absmartly-sdk_2.13</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
 ### Gradle
 
 ```gradle
-implementation 'com.absmartly:absmartly-sdk_2.13:0.2.0'
+implementation 'com.absmartly:absmartly-sdk_2.13:0.3.0'
 ```
 
 ## Getting Started
@@ -161,6 +161,10 @@ context.setUnits(Map(
 ))
 ```
 
+## Migrating from 0.2.0 to 0.3.0
+
+`Exposure` gains a `ruleOverride` field and `ExperimentData` an `assignmentRules` field. The old constructors and `apply` overloads still work; a positional pattern match on either class (`case Exposure(id, name, ...)`) or a call to the old `copy` arity needs updating. See the CHANGELOG.
+
 ## Migrating from 0.1.0 to 0.2.0
 
 Version 0.2.0 contains source-incompatible changes to align the Scala SDK with the other ABsmartly SDKs:
@@ -249,6 +253,24 @@ context.setAttributes(Map(
 ))
 ```
 
+Audiences are always evaluated with the client's configured `application` and
+`environment` as built-in attributes, so audience filters can target them
+without you setting anything. A user-set attribute of the same name always
+wins — including one set after the context is created, which re-evaluates any
+cached assignment. These built-in values are used for evaluation only; they are
+never added to the publish payload (the collector attaches them server-side).
+The same values are visible to assignment-rule conditions.
+
+Audience filters and rule conditions support the semantic-version operators
+`semver_eq`, `semver_gt`, `semver_gte`, `semver_lt` and `semver_lte`, for
+example `{"semver_gte": [{"var": "app_version"}, {"value": "2.4.0"}]}`. A
+leading `v` and build metadata are ignored, missing parts count as `0`, numeric
+parts compare numerically, and a pre-release sorts before its release. Like the
+JavaScript and Java SDKs, parsing is permissive: a non-numeric part (as in
+`1.x`) is compared as text, after any numeric one. Only an operand that is
+empty (or empty after removing `v` and build metadata) or has no string form
+(`null`, an array or an object) makes the comparison `null` (no match).
+
 ### Custom Assignments
 
 Custom assignments allow you to set a specific variant for an experiment programmatically.
@@ -261,6 +283,28 @@ context.setCustomAssignments(Map(
   "exp_another_experiment" -> 0
 ))
 ```
+
+### Assignment Rules
+
+Experiments can carry assignment rules, configured in the Web Console. The SDK
+applies them automatically; there is no API to call. The first rule whose
+`environments` include the SDK's environment (an empty list means all
+environments) and whose `conditions` match the context attributes wins:
+
+- an `assign` rule gives its fixed variant;
+- a `split` rule divides matching units across the variants by its percentages
+  (e.g. `"20/30/50"`), hashing the unit with the experiment's own seed. A split
+  rule that matches while the experiment's unit is not set gives the experiment's
+  no-unit variant (the full-on variant, otherwise 0) and is re-resolved once the
+  unit is set, unless it was already exposed.
+
+A matching rule beats audiences (including `audienceStrict`), traffic
+eligibility, the full-on variant and custom assignments; only `setOverride()`
+beats a rule. Rule assignments are published with `ruleOverride: true` (and
+`assigned: false`), which keeps them out of the experiment's analysis. A
+malformed rule is skipped; an assign rule whose variant is out of range, or a
+split whose share count differs from the variant count, stops rule evaluation
+and the unit is assigned normally.
 
 ### Tracking Goals
 

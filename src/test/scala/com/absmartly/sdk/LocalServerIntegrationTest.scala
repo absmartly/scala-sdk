@@ -30,30 +30,33 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
 
   override def beforeEach(): Unit = {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
-    server.createContext("/context", (exchange: HttpExchange) => {
-      val body = new String(exchange.getRequestBody.readAllBytes(), StandardCharsets.UTF_8)
-      val headers = exchange.getRequestHeaders.asScala.map { case (k, v) =>
-        k.toLowerCase -> v.asScala.mkString(",")
-      }.toMap
-      val uri = exchange.getRequestURI
-      requests.add(RecordedRequest(
-        method = exchange.getRequestMethod,
-        path = uri.getPath,
-        rawQuery = Option(uri.getRawQuery).getOrElse(""),
-        headers = headers,
-        body = body
-      ))
+    server.createContext(
+      "/context",
+      (exchange: HttpExchange) => {
+        val body = new String(exchange.getRequestBody.readAllBytes(), StandardCharsets.UTF_8)
+        val headers = exchange.getRequestHeaders.asScala.map { case (k, v) =>
+          k.toLowerCase -> v.asScala.mkString(",")
+        }.toMap
+        val uri = exchange.getRequestURI
+        requests.add(RecordedRequest(
+          method = exchange.getRequestMethod,
+          path = uri.getPath,
+          rawQuery = Option(uri.getRawQuery).getOrElse(""),
+          headers = headers,
+          body = body
+        ))
 
-      val response =
-        if (exchange.getRequestMethod == "GET") """{"experiments":[]}"""
-        else "{}"
-      val bytes = response.getBytes(StandardCharsets.UTF_8)
-      exchange.getResponseHeaders.add("Content-Type", "application/json")
-      exchange.sendResponseHeaders(200, bytes.length.toLong)
-      val os = exchange.getResponseBody
-      os.write(bytes)
-      os.close()
-    })
+        val response =
+          if (exchange.getRequestMethod == "GET") """{"experiments":[]}"""
+          else "{}"
+        val bytes = response.getBytes(StandardCharsets.UTF_8)
+        exchange.getResponseHeaders.add("Content-Type", "application/json")
+        exchange.sendResponseHeaders(200, bytes.length.toLong)
+        val os = exchange.getResponseBody
+        os.write(bytes)
+        os.close()
+      }
+    )
     server.start()
     port = server.getAddress.getPort
   }
@@ -106,7 +109,12 @@ class LocalServerIntegrationTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(h.get("x-application").contains("website"))
     assert(h.get("x-environment").contains("dev"))
     assert(h.get("x-application-version").contains("0"))
-    assert(h.get("x-agent").exists(_.nonEmpty), "X-Agent must be present and non-empty")
+    assert(h.get("x-agent").contains(s"absmartly-scala-sdk/${SdkBuildInfo.version}"))
+    assert(recorded.find(_.method == "GET").get.headers.get("x-agent").contains(Http.Agent))
+    // Cross-SDK scenarios 320/321: both requests carry absmartly-scala-sdk/<semver>.
+    val agentPattern = "^absmartly-[a-z0-9]+-sdk/[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]*)?$"
+    assert(get.get.headers.get("x-agent").exists(_.matches(agentPattern)), get.get.headers.get("x-agent"))
+    assert(h.get("x-agent").exists(_.matches(agentPattern)), h.get("x-agent"))
     assert(h.get("content-type").exists(_.contains("application/json")))
 
     val json = parse(put.get.body).getOrElse(Json.Null)

@@ -78,7 +78,7 @@ object Utils {
     val encoder = java.nio.charset.StandardCharsets.UTF_8.newEncoder()
       .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
       .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
-      .replaceWith(Array(0xEF.toByte, 0xBF.toByte, 0xBD.toByte))
+      .replaceWith(Array(0xef.toByte, 0xbf.toByte, 0xbd.toByte))
     val encoded = encoder.encode(java.nio.CharBuffer.wrap(value))
     java.util.Arrays.copyOfRange(encoded.array, encoded.arrayOffset + encoded.position(), encoded.arrayOffset + encoded.limit())
   }

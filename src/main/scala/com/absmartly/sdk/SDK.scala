@@ -178,10 +178,19 @@ class SDK(config: SDKConfig)(implicit ec: ExecutionContext) {
 private[sdk] object Http {
   private val RetryDelayMs = 50L
 
+  private val SemVer = "[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]*)?".r
+
+  /** "absmartly-scala-sdk/<version>"; a non-semver build version becomes 0.0.0-SNAPSHOT. */
+  private[sdk] def agent(version: String): String =
+    s"absmartly-scala-sdk/${if (SemVer.matches(version)) version else "0.0.0-SNAPSHOT"}"
+
+  /** The X-Agent header value: "absmartly-scala-sdk/<version>", the version taken from the build. */
+  val Agent: String = agent(SdkBuildInfo.version)
+
   def headers(config: SDKConfig): Map[String, String] = Map(
     "Content-Type" -> "application/json",
     "X-API-Key" -> config.apiKey,
-    "X-Agent" -> "absmartly-scala-sdk",
+    "X-Agent" -> Agent,
     "X-Environment" -> config.environment,
     "X-Application" -> config.application,
     "X-Application-Version" -> "0"

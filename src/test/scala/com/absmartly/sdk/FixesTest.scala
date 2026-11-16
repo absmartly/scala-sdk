@@ -55,7 +55,6 @@ class FixesTest extends AnyFunSuite {
     sdk.createContextWith(units, data, options)
   }
 
-
   test("fix1/13/14: _flush builds PublishEvent and calls sdk.publish") {
     var publishCalled = false
     var publishedUnits: Map[String, String] = Map.empty
@@ -179,7 +178,6 @@ class FixesTest extends AnyFunSuite {
     assert(publishedAttributes.get.exists(_.name == "age"))
   }
 
-
   test("fix2: regex match with normal pattern works") {
     val expr = parse("""{"match": [{"value": "hello123"}, {"value": "\\d+"}]}""").toOption.get
     val result = com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty)
@@ -199,7 +197,6 @@ class FixesTest extends AnyFunSuite {
     val result = com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty)
     assert(result.asBoolean.contains(false))
   }
-
 
   test("fix3: Logger instance is visible across threads") {
     val previousLogger = Logger.get
@@ -221,7 +218,6 @@ class FixesTest extends AnyFunSuite {
     }
   }
 
-
   test("fix4: state flags visible across threads") {
     val context = createContext()
     assert(context.isReady())
@@ -235,7 +231,6 @@ class FixesTest extends AnyFunSuite {
     assert(readyFromThread)
   }
 
-
   test("fix5: pending returns consistent count under concurrent access") {
     val context = createContext()
     context.treatment("exp_test_ab")
@@ -246,7 +241,6 @@ class FixesTest extends AnyFunSuite {
     val results = Await.result(Future.sequence(futures), 5.seconds)
     assert(results.forall(_ == 1))
   }
-
 
   test("fix6: variableValue is thread-safe") {
     val context = createContext()
@@ -406,7 +400,9 @@ class FixesTest extends AnyFunSuite {
 
   test("catastrophic regex is aborted on the calling thread without leaking workers") {
     val before = Thread.getAllStackTraces.keySet.size
-    val expr = parse("""{"match":[{"value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"},{"value":"(a+)+$"}]}""").toOption.get
+    val expr = parse(
+      """{"match":[{"value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"},{"value":"(a+)+$"}]}"""
+    ).toOption.get
     (1 to 5).foreach(_ => assert(com.absmartly.sdk.jsonexpr.Evaluator.evaluate(expr, Map.empty) == Json.False))
     assert(Thread.getAllStackTraces.keySet.size <= before + 1)
   }
@@ -550,7 +546,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.pending() == 1)
   }
 
-
   test("fix7: SDKConfig toString masks API key showing only last 4 chars") {
     val cfg = SDKConfig(
       endpoint = "https://test.absmartly.io/v1",
@@ -563,7 +558,6 @@ class FixesTest extends AnyFunSuite {
     assert(str.contains("***2345"))
   }
 
-
   test("fix8: setOverride does not invalidate assigner cache for other experiments") {
     val context = createContext()
     val v1 = context.peek("exp_test_ab")
@@ -571,13 +565,11 @@ class FixesTest extends AnyFunSuite {
     assert(context.peek("exp_test_ab") == 0)
   }
 
-
   test("fix11: AudienceMatcher catches non-fatal exceptions gracefully") {
     val matcher = new AudienceMatcher(Map.empty)
     val result = matcher.evaluate(Some("invalid json {{{"))
     assert(result == None)
   }
-
 
   test("fix12: customFieldValue handles valid boolean") {
     val exp = expTestAb.copy(
@@ -609,7 +601,6 @@ class FixesTest extends AnyFunSuite {
     assert(result.contains(Json.fromString("not-a-bool")))
   }
 
-
   test("fix15: refresh is thread-safe with concurrent treatment calls") {
     val context = createContext()
 
@@ -626,7 +617,6 @@ class FixesTest extends AnyFunSuite {
     Await.result(Future.sequence(futures), 10.seconds)
     assert(context.isReady())
   }
-
 
   test("fix16: data() is thread-safe") {
     val context = createContext()
@@ -646,7 +636,6 @@ class FixesTest extends AnyFunSuite {
     assert(results.forall(_.contains("exp_test_ab")))
   }
 
-
   test("fix17: getAttribute is thread-safe with concurrent setAttribute") {
     val context = createContext()
 
@@ -665,7 +654,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.getAttribute("attr_50").flatMap(_.asNumber).flatMap(_.toInt).contains(50))
   }
 
-
   test("fix18: getUnit is thread-safe") {
     val context = createContext()
     val futures = (1 to 50).map { _ =>
@@ -683,7 +671,6 @@ class FixesTest extends AnyFunSuite {
     val results = Await.result(Future.sequence(futures), 5.seconds)
     assert(results.forall(_.nonEmpty))
   }
-
 
   test("fix25: setUnit masks UID in log output") {
     var loggedMessage = ""
@@ -707,7 +694,6 @@ class FixesTest extends AnyFunSuite {
     }
   }
 
-
   test("readyError returns None when context loaded successfully") {
     val context = createContext()
     assert(context.readyError().isEmpty)
@@ -727,7 +713,6 @@ class FixesTest extends AnyFunSuite {
     assert(context.readyError().isEmpty)
     assert(context.isFailed())
   }
-
 
   test("customFieldKeys returns all keys across all experiments") {
     val exp1 = expTestAb.copy(
@@ -759,7 +744,6 @@ class FixesTest extends AnyFunSuite {
     assert(keys.isEmpty)
   }
 
-
   test("fix4.1: setOverride succeeds after context is finalized") {
     val context = createContext()
     Await.result(context.finalizeContext(), 5.seconds)
@@ -773,7 +757,6 @@ class FixesTest extends AnyFunSuite {
     assert(!threw, "setOverride should not throw after finalize")
   }
 
-
   test("close is alias for finalizeContext") {
     val context = createContext()
     assert(!context.isFinalized())
@@ -786,7 +769,6 @@ class FixesTest extends AnyFunSuite {
     assert(!context.isFinalized())
     assert(!context.isFinalizing())
   }
-
 
   test("not ready error message is standardized") {
     val context = new Context(sdk, None, Map.empty, ContextOptions(), NoOpEventLogger)
@@ -817,7 +799,6 @@ class FixesTest extends AnyFunSuite {
     assert(ex.getMessage.contains("UID already set."))
   }
 
-
   final class RecordingLogger extends EventLogger {
     val events = scala.collection.mutable.ListBuffer[(String, Json)]()
     def logEvent(eventType: String, data: Json): Unit = synchronized { events += (eventType -> data); () }
@@ -838,7 +819,8 @@ class FixesTest extends AnyFunSuite {
 
   test("createContext yields a ready, failed context when the fetch fails") {
     val logger = new RecordingLogger
-    val failing = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
+    val failing =
+      new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
     val context = Await.result(failing.createContext(testUnits), 10.seconds)
     assert(context.isReady() && context.isFailed())
     assert(context.readyError().isDefined)
@@ -848,10 +830,18 @@ class FixesTest extends AnyFunSuite {
   test("a failed publish logs an error event and keeps the events queued") {
     val logger = new RecordingLogger
     val failingPublisher = new ContextPublisher {
-      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]]): Future[Unit] =
+      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]])
+        : Future[Unit] =
         Future.failed(new RuntimeException("Publish failed"))
     }
-    val psdk = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", eventLogger = logger, publisher = Some(failingPublisher)))
+    val psdk = new SDK(SDKConfig(
+      endpoint = "http://127.0.0.1:1",
+      apiKey = "k",
+      application = "a",
+      environment = "e",
+      eventLogger = logger,
+      publisher = Some(failingPublisher)
+    ))
     val context = psdk.createContextWith(testUnits, testData)
     context.track("goal")
     intercept[RuntimeException](Await.result(context.publish(), 5.seconds))
@@ -879,7 +869,8 @@ class FixesTest extends AnyFunSuite {
     assert(context.getUnitValues() == Map(
       "session_id" -> Json.fromString("abc"),
       "user_id" -> Json.fromLong(125),
-      "float_id" -> Json.fromDoubleOrNull(125.75)))
+      "float_id" -> Json.fromDoubleOrNull(125.75)
+    ))
     context.setUnit("user_id", 125L)
     assert(intercept[IllegalStateException](context.setUnit("user_id", "125")).getMessage == "Unit 'user_id' UID already set.")
   }
@@ -887,7 +878,8 @@ class FixesTest extends AnyFunSuite {
   test("a context publishes numeric units hashed like the JS SDK") {
     var published: Map[String, String] = Map.empty
     val capturing = new ContextPublisher {
-      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]]): Future[Unit] = {
+      def publish(units: Map[String, String], hashed: Boolean, exposures: List[Exposure], goals: List[Goal], attributes: Option[List[Attribute]])
+        : Future[Unit] = {
         published = units
         Future.successful(())
       }
@@ -905,7 +897,8 @@ class FixesTest extends AnyFunSuite {
 
   test("a failed refresh fetch logs an error event and rethrows") {
     val logger = new RecordingLogger
-    val failing = new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
+    val failing =
+      new SDK(SDKConfig(endpoint = "http://127.0.0.1:1", apiKey = "k", application = "a", environment = "e", retries = 0, timeout = 200, eventLogger = logger))
     val context = failing.createContextWith(testUnits, testData)
     intercept[Exception](context.refresh())
     assert(logger.types == List("ready", "error"))
