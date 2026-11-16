@@ -364,6 +364,20 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(contextWith(negative).peek("exp_test_abc") == 2)
   }
 
+  test("a non-finite assign variant is skipped like JS Infinity, so the next rule wins") {
+    Seq("1e400", "-1e400", "1e999999999").foreach { variant =>
+      val exp = withRules(s"""{"type":"assign","variant":$variant,"conditions":null}""", assignRule(1, "null"))
+      assert(contextWith(exp).peek("exp_test_abc") == 1, variant)
+    }
+  }
+
+  test("an assign variant is read as the JS double it parses to") {
+    val tiny = withRules("""{"type":"assign","variant":1e-400,"conditions":null}""", assignRule(1, "null"))
+    assert(contextWith(tiny).peek("exp_test_abc") == 0)
+    val nearOne = withRules("""{"type":"assign","variant":1.0000000000000001,"conditions":null}""", assignRule(0, "null"))
+    assert(contextWith(nearOne).peek("exp_test_abc") == 1)
+  }
+
   test("an out-of-bounds or negative assign variant falls back to normal assignment") {
     assert(contextWith(withRules(assignRule(3, "null"))).peek("exp_test_abc") == 2)
     assert(contextWith(withRules(assignRule(-1, "null"))).peek("exp_test_abc") == 2)
