@@ -17,7 +17,7 @@ The ABsmartly Scala SDK is compatible with Scala 2.13+ and Scala 3. It provides 
 Add this to your `build.sbt`:
 
 ```scala
-libraryDependencies += "com.absmartly" %% "absmartly-sdk" % "0.2.0"
+libraryDependencies += "com.absmartly" %% "absmartly-sdk" % "0.3.0"
 ```
 
 ### Maven
@@ -28,14 +28,14 @@ Add this to your `pom.xml`:
 <dependency>
   <groupId>com.absmartly</groupId>
   <artifactId>absmartly-sdk_2.13</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
 ### Gradle
 
 ```gradle
-implementation 'com.absmartly:absmartly-sdk_2.13:0.2.0'
+implementation 'com.absmartly:absmartly-sdk_2.13:0.3.0'
 ```
 
 ## Getting Started
@@ -160,6 +160,10 @@ context.setUnits(Map(
   "user_type" -> "premium"
 ))
 ```
+
+## Migrating from 0.2.0 to 0.3.0
+
+`Exposure` gains a `ruleOverride` field and `ExperimentData` an `assignmentRules` field. The old constructors and `apply` overloads still work; a positional pattern match on either class (`case Exposure(id, name, ...)`) or a call to the old `copy` arity needs updating. See the CHANGELOG.
 
 ## Migrating from 0.1.0 to 0.2.0
 

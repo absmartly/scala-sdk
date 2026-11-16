@@ -2,7 +2,21 @@
 
 All notable changes to the ABsmartly Scala SDK are documented in this file.
 
-## [Unreleased]
+## [0.3.0] - Unreleased
+
+The first version published to Maven Central (0.2.0 was never published).
+
+### Breaking
+
+- `Exposure` gains a 12th field, `ruleOverride`, and `ExperimentData` a 17th,
+  `assignmentRules`. Their old constructors and companion `apply` overloads are
+  kept, so code compiled against 0.2.0 still links and `Exposure(...)` /
+  `ExperimentData(...)` calls with the old arguments still compile. What cannot
+  be kept on a case class: `copy` and `unapply` now have the new arity, so a
+  positional pattern such as `case Exposure(id, name, ...)` with 11 fields (or
+  `ExperimentData` with 16) must add the new field or use a type pattern, and
+  binaries calling the old `copy` must be recompiled. A custom
+  `ContextPublisher` receives `ruleOverride` on each `Exposure`.
 
 ### Added
 
@@ -27,9 +41,11 @@ All notable changes to the ABsmartly Scala SDK are documented in this file.
 - The version is derived from git tags (sbt-dynver) instead of `build.sbt`.
 - An audience filter that throws during evaluation now counts as a mismatch, so
   a strict audience gives variant 0 (it previously counted as no decision).
-
-### Changed
-
+- Assignment rules (and audiences) are re-evaluated on the next read after
+  `setAttribute`, even for an exposed assignment, as in the JS SDK. A changed
+  variant is exposed once more.
+- `EventLogger` events: `exposure` data gains `ruleOverride`, and the
+  experiments in `ready` / `refresh` data gain `assignmentRules`.
 - **Audiences are now always evaluated with `application` and `environment`.**
   Every context now evaluates audience filters against the `application` (the
   application name) and `environment` (the environment name, exactly as
@@ -48,6 +64,9 @@ All notable changes to the ABsmartly Scala SDK are documented in this file.
   supplied those attributes and the strict mismatch beat the full-on variant.
   After upgrading, such a unit is randomised normally. Those experiments are
   broken today; this release fixes them, but the assignment they produce changes.
+  Likewise, a unit in a non-strict experiment whose audience filters on
+  `environment` or `application` and matches the configured value no longer
+  reports `audienceMismatch: true` in its exposure.
 
 - `app_version` / `application_version` is never injected into the audience
   evaluation map. Unlike `application`/`environment`, it is not added
