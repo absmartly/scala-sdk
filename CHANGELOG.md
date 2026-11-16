@@ -46,6 +46,9 @@ The first version published to Maven Central (0.2.0 was never published).
   variant is exposed once more.
 - `EventLogger` events: `exposure` data gains `ruleOverride`, and the
   experiments in `ready` / `refresh` data gain `assignmentRules`.
+- Every published exposure now carries `"ruleOverride"` (`false` unless a rule
+  gave the variant), as the JS and Java SDKs send it. Custom publishers or
+  consumers that snapshot the exposure JSON see the extra field.
 - **Audiences are now always evaluated with `application` and `environment`.**
   Every context now evaluates audience filters against the `application` (the
   application name) and `environment` (the environment name, exactly as
