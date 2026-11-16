@@ -451,6 +451,34 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(asString.toOption.get.experiments.head.assignmentRules.contains("""{"rules":[]}"""))
   }
 
+  test("unusable assignmentRules values only drop that experiment's rules") {
+    def experiment(id: Int, name: String, rulesField: String) =
+      s"""{"id":$id,"name":"$name","unitType":"session_id","iteration":1,
+       "seedHi":55006150,"seedLo":47189152,"split":[0.34,0.33,0.33],"trafficSeedHi":705671872,
+       "trafficSeedLo":212903484,"trafficSplit":[0,1],"fullOnVariant":0,"applications":[],
+       "variants":[{"name":"A","config":null},{"name":"B","config":null},{"name":"C","config":null}]$rulesField}"""
+    val ruleOk = Json.fromString(s"""{"rules":[${assignRule(1, "null")}]}""").noSpaces
+    List(
+      "",
+      ""","assignmentRules":null""",
+      ",\"assignmentRules\":\"\"",
+      ""","assignmentRules":"{}"""",
+      ""","assignmentRules":"not json"""",
+      ""","assignmentRules":7""",
+      ""","assignmentRules":true""",
+      ""","assignmentRules":{"rules":[]}""",
+      ""","assignmentRules":[1]"""
+    ).foreach { field =>
+      val json = s"""{"experiments":[${experiment(2, "exp_test_abc", field)},${experiment(3, "exp_rules", s""","assignmentRules":$ruleOk""")}]}"""
+      val data = decode[ContextData](json)
+      assert(data.isRight, field)
+      val context = sdkFor().createContextWith(units, data.toOption.get)
+      assert(context.isReady() && !context.isFailed(), field)
+      assert(context.treatment("exp_test_abc") == 2, field)
+      assert(context.treatment("exp_rules") == 1, field)
+    }
+  }
+
   test("unknown fields at every level of the context payload are ignored") {
     val unknown = """"futureScalar":1,"futureObject":{"a":[1,{"b":null}]},"futureArray":[true,"x",{}]"""
     val rule =
