@@ -66,7 +66,46 @@ case class ExperimentData(
   audience: Option[String] = None,
   customFieldValues: Option[List[CustomFieldValue]] = None,
   assignmentRules: Option[String] = None
-)
+) {
+
+  /** The 16-field constructor from before `assignmentRules`, kept for binary compatibility. */
+  def this(
+    id: Int,
+    name: String,
+    unitType: String,
+    iteration: Int,
+    seedHi: Int,
+    seedLo: Int,
+    split: List[Double],
+    trafficSeedHi: Int,
+    trafficSeedLo: Int,
+    trafficSplit: List[Double],
+    fullOnVariant: Int,
+    applications: List[ExperimentApplication],
+    variants: List[ExperimentVariant],
+    audienceStrict: Boolean,
+    audience: Option[String],
+    customFieldValues: Option[List[CustomFieldValue]]
+  ) = this(
+    id,
+    name,
+    unitType,
+    iteration,
+    seedHi,
+    seedLo,
+    split,
+    trafficSeedHi,
+    trafficSeedLo,
+    trafficSplit,
+    fullOnVariant,
+    applications,
+    variants,
+    audienceStrict,
+    audience,
+    customFieldValues,
+    None
+  )
+}
 
 case class CustomFieldValue(
   name: String,
@@ -84,6 +123,45 @@ case class ExperimentVariant(
 )
 
 object ExperimentData {
+
+  /** The 16-field `apply` from before `assignmentRules`, kept for binary compatibility. */
+  def apply(
+    id: Int,
+    name: String,
+    unitType: String,
+    iteration: Int,
+    seedHi: Int,
+    seedLo: Int,
+    split: List[Double],
+    trafficSeedHi: Int,
+    trafficSeedLo: Int,
+    trafficSplit: List[Double],
+    fullOnVariant: Int,
+    applications: List[ExperimentApplication],
+    variants: List[ExperimentVariant],
+    audienceStrict: Boolean,
+    audience: Option[String],
+    customFieldValues: Option[List[CustomFieldValue]]
+  ): ExperimentData = new ExperimentData(
+    id,
+    name,
+    unitType,
+    iteration,
+    seedHi,
+    seedLo,
+    split,
+    trafficSeedHi,
+    trafficSeedLo,
+    trafficSplit,
+    fullOnVariant,
+    applications,
+    variants,
+    audienceStrict,
+    audience,
+    customFieldValues,
+    None
+  )
+
   implicit val applicationDecoder: Decoder[ExperimentApplication] = deriveDecoder
   implicit val applicationEncoder: Encoder[ExperimentApplication] = deriveEncoder
   implicit val variantDecoder: Decoder[ExperimentVariant] = deriveDecoder
@@ -178,14 +256,7 @@ case class Assignment(
   audienceMismatch: Boolean,
   fullOn: Boolean,
   custom: Boolean,
-  attrsSeq: Int = 0,
-  ruleOverride: Boolean = false,
-  // The variant the assignment rules resolved to when this was built (None: no rule matched).
-  ruleVariant: Option[Int] = None,
-  // The rules and environment this was resolved against; a change re-evaluates the rules.
-  ruleKey: String = "",
-  // A split rule matched while the experiment's unit was not set.
-  ruleMissingUnit: Boolean = false
+  attrsSeq: Int = 0
 )
 
 /**
@@ -204,9 +275,42 @@ case class Exposure(
   custom: Boolean,
   audienceMismatch: Boolean,
   ruleOverride: Boolean = false
-)
+) {
+
+  /** The 11-field constructor from before `ruleOverride`, kept for binary compatibility. */
+  def this(
+    id: Int,
+    name: String,
+    unit: String,
+    variant: Int,
+    exposedAt: Long,
+    assigned: Boolean,
+    eligible: Boolean,
+    overridden: Boolean,
+    fullOn: Boolean,
+    custom: Boolean,
+    audienceMismatch: Boolean
+  ) = this(id, name, unit, variant, exposedAt, assigned, eligible, overridden, fullOn, custom, audienceMismatch, false)
+}
 
 object Exposure {
+
+  /** The 11-field `apply` from before `ruleOverride`, kept for binary compatibility. */
+  def apply(
+    id: Int,
+    name: String,
+    unit: String,
+    variant: Int,
+    exposedAt: Long,
+    assigned: Boolean,
+    eligible: Boolean,
+    overridden: Boolean,
+    fullOn: Boolean,
+    custom: Boolean,
+    audienceMismatch: Boolean
+  ): Exposure =
+    new Exposure(id, name, unit, variant, exposedAt, assigned, eligible, overridden, fullOn, custom, audienceMismatch, false)
+
   implicit val encoder: Encoder[Exposure] = deriveEncoder
 }
 
