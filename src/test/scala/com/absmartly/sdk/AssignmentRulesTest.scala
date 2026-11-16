@@ -292,6 +292,78 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(other.peek("exp_test_abc") == 1)
   }
 
+  test("the rule scope uses the configured environment while conditions see the user environment") {
+    // Configured production, user environment=staging: the staging-scoped rule must not match
+    // (scope comes from the client config), while the production-scoped rule's condition sees
+    // the user value.
+    val context = contextWith(withRules(
+      assignRule(1, "null", environments = """["staging"]"""),
+      assignRule(0, """{"eq":[{"var":"environment"},{"value":"staging"}]}""", environments = """["production"]""")
+    ))
+    context.setAttribute("environment", Json.fromString("staging"))
+    assert(context.treatment("exp_test_abc") == 0)
+    assert(publishedExposures(context).head.ruleOverride)
+  }
+
+  test("a rule wins over a zero-traffic split") {
+    val context = contextWith(withRules(assignRule(1)).copy(trafficSplit = List(1.0, 0.0)))
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 1)
+    val e = publishedExposures(context).head
+    assert(e.ruleOverride && e.eligible && !e.assigned)
+  }
+
+  test("cross-sdk scenario 306: a rule wins over traffic split and full-on") {
+    def exp(id: Int, name: String, split: List[Double], trafficSplit: List[Double], fullOn: Int, withRule: Boolean) =
+      ExperimentData(
+        id = id,
+        name = name,
+        unitType = "session_id",
+        iteration = 1,
+        seedHi = 0,
+        seedLo = 0,
+        split = split,
+        trafficSeedHi = 0,
+        trafficSeedLo = 0,
+        trafficSplit = trafficSplit,
+        fullOnVariant = fullOn,
+        applications = List(ExperimentApplication("website")),
+        variants = split.indices.map(i => ExperimentVariant(('A' + i).toChar.toString, None)).toList,
+        assignmentRules = if (withRule) Some("""{"rules":[{"name":"a","type":"assign","variant":1}]}""") else None
+      )
+    val data = ContextData(List(
+      exp(430, "exp_rules_traffic", List(0.0, 1.0), List(1.0, 0.0), 0, withRule = true),
+      exp(431, "exp_rules_traffic_plain", List(0.0, 1.0), List(1.0, 0.0), 0, withRule = false),
+      exp(432, "exp_rules_fullon", List(0.0, 0.0, 1.0), List(0.0, 1.0), 2, withRule = true)
+    ))
+    val context = sdkFor().createContextWith(Map("session_id" -> "svk-unit-1"), data)
+    assert(context.treatment("exp_rules_traffic") == 1)
+    assert(context.treatment("exp_rules_traffic_plain") == 0)
+    assert(context.treatment("exp_rules_fullon") == 1)
+    assert(context.pending() == 3)
+    published = Nil
+    Await.result(context.publish(), 5.seconds)
+    val flags = published.map(e => (e.name, e.variant, e.assigned, e.eligible, e.fullOn, e.ruleOverride))
+    assert(flags == List(
+      ("exp_rules_traffic", 1, false, true, false, true),
+      ("exp_rules_traffic_plain", 0, true, false, false, false),
+      ("exp_rules_fullon", 1, false, true, false, true)
+    ))
+  }
+
+  test("an integral assign variant beyond Int range is out of bounds and stops rule evaluation") {
+    val exp = withRules(
+      """{"type":"assign","variant":2147483648,"conditions":null}""",
+      assignRule(0, "null")
+    )
+    assert(contextWith(exp).peek("exp_test_abc") == 2)
+    val negative = withRules(
+      """{"type":"assign","variant":-2147483649,"conditions":null}""",
+      assignRule(0, "null")
+    )
+    assert(contextWith(negative).peek("exp_test_abc") == 2)
+  }
+
   test("an out-of-bounds or negative assign variant falls back to normal assignment") {
     assert(contextWith(withRules(assignRule(3, "null"))).peek("exp_test_abc") == 2)
     assert(contextWith(withRules(assignRule(-1, "null"))).peek("exp_test_abc") == 2)
@@ -377,6 +449,34 @@ class AssignmentRulesTest extends AnyFunSuite {
 
     val asString = decode[ContextData](json.replace("""{"rules":[]}""", "\"{\\\"rules\\\":[]}\""))
     assert(asString.toOption.get.experiments.head.assignmentRules.contains("""{"rules":[]}"""))
+  }
+
+  test("unknown fields at every level of the context payload are ignored") {
+    val unknown = """"futureScalar":1,"futureObject":{"a":[1,{"b":null}]},"futureArray":[true,"x",{}]"""
+    val rule =
+      s"""{"name":"US","type":"assign","variant":1,"conditions":$usCondition,"environments":[],$unknown}"""
+    val rulesJson = s"""{"rules":[$rule],$unknown}"""
+    val json = s"""{"experiments":[
+      {"id":2,"name":"exp_test_abc","unitType":"session_id","iteration":1,
+       "seedHi":55006150,"seedLo":47189152,"split":[0.34,0.33,0.33],"trafficSeedHi":705671872,
+       "trafficSeedLo":212903484,"trafficSplit":[0,1],"fullOnVariant":0,
+       "applications":[{"name":"website",$unknown}],
+       "variants":[{"name":"A","config":null,$unknown},{"name":"B","config":null},{"name":"C","config":null}],
+       "customFieldValues":[{"name":"f","value":"v","type":"string",$unknown}],
+       "assignmentRules":${Json.fromString(rulesJson).noSpaces},$unknown},
+      {"id":3,"name":"exp_plain","unitType":"session_id","iteration":1,
+       "seedHi":55006150,"seedLo":47189152,"split":[0.34,0.33,0.33],"trafficSeedHi":705671872,
+       "trafficSeedLo":212903484,"trafficSplit":[0,1],"fullOnVariant":0,"applications":[],
+       "variants":[{"name":"A","config":null},{"name":"B","config":null},{"name":"C","config":null,$unknown}],
+       $unknown}
+    ],$unknown}"""
+    val data = decode[ContextData](json)
+    assert(data.isRight, data)
+    val context = sdkFor().createContextWith(units, data.toOption.get)
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 1)
+    assert(context.treatment("exp_plain") == 2)
+    assert(context.customFieldValue("exp_test_abc", "f").contains(Json.fromString("v")))
   }
 
   // ---- split rules ----
@@ -522,5 +622,34 @@ class AssignmentRulesTest extends AnyFunSuite {
     context.refresh(ContextData(List(withRules(assignRule(0)))))
     assert(context.peek("exp_test_abc") == 0)
     assert(parses == 2)
+  }
+
+  test("a same-outcome revalidation is remembered, so later reads do not evaluate the rules again") {
+    var evaluations = 0
+    val context = new Context(sdkFor(), ContextData(List(withRules(assignRule(1)))), units, ContextOptions(), NoOpEventLogger) {
+      override private[sdk] def resolveRule(exp: ExperimentData, isUnitPinnedMissing: Boolean): Option[(Int, Boolean)] = {
+        evaluations += 1
+        super.resolveRule(exp, isUnitPinnedMissing)
+      }
+    }
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 1)
+    assert(evaluations == 1)
+
+    // Unrelated attribute: re-evaluated once, same outcome, then cached again.
+    context.setAttribute("unrelated", Json.True)
+    (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
+    assert(evaluations == 2)
+
+    // Refresh with identical rules: nothing to re-evaluate.
+    context.refresh(ContextData(List(withRules(assignRule(1)))))
+    (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
+    assert(evaluations == 2)
+
+    // Refresh with different rules giving the same outcome: re-evaluated once.
+    context.refresh(ContextData(List(withRules(assignRule(1), assignRule(0, "null")))))
+    (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
+    assert(evaluations == 3)
+    assert(context.pending() == 1)
   }
 }

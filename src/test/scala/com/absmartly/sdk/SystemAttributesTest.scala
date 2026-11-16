@@ -246,4 +246,18 @@ class SystemAttributesTest extends AnyFunSuite {
     val context = contextWith(exp)
     assert(context.peek("exp_test_ab") == 0)
   }
+
+  test("app_version is absent from the evaluation map unless the caller sets it") {
+    val exp = baseExp.copy(
+      fullOnVariant = 1,
+      audienceStrict = true,
+      audience = Some("""{"filter":{"null":{"var":"app_version"}}}""")
+    )
+    val context = new SDK(config()).createContextWith(testUnits, ContextData(experiments = List(exp)))
+    assert(context.peek("exp_test_ab") == 1)
+
+    // An explicitly set app_version is still supported, as in the JS SDK.
+    context.setAttribute("app_version", Json.fromString("2.4.1"))
+    assert(context.peek("exp_test_ab") == 0)
+  }
 }
