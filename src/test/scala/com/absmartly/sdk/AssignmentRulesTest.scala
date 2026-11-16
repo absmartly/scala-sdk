@@ -667,28 +667,63 @@ class AssignmentRulesTest extends AnyFunSuite {
   }
 
   test("a same-outcome revalidation is remembered, so later reads do not evaluate the rules again") {
-    var evaluations = 0
-    val context = new Context(sdkFor(), ContextData(List(withRules(assignRule(1)))), units, ContextOptions(), NoOpEventLogger) {
-      override private[sdk] def resolveRule(exp: ExperimentData, isUnitPinnedMissing: Boolean): Option[(Int, Boolean)] = {
-        evaluations += 1
-        super.resolveRule(exp, isUnitPinnedMissing)
-      }
-    }
+    val context = new CountingContext(ContextData(List(withRules(assignRule(1)))))
     context.setAttribute("country", Json.fromString("US"))
     assert(context.treatment("exp_test_abc") == 1)
-    assert(evaluations == 1)
+    assert(context.evaluations == 1)
 
     context.setAttribute("unrelated", Json.True)
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
-    assert(evaluations == 2)
+    assert(context.evaluations == 2)
 
     context.refresh(ContextData(List(withRules(assignRule(1)))))
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
-    assert(evaluations == 2)
+    assert(context.evaluations == 2)
 
     context.refresh(ContextData(List(withRules(assignRule(1), assignRule(0, "null")))))
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
-    assert(evaluations == 3)
+    assert(context.evaluations == 3)
     assert(context.pending() == 1)
+  }
+
+  private class CountingContext(data: ContextData)
+      extends Context(sdkFor(), data, units, ContextOptions(), NoOpEventLogger) {
+    var evaluations = 0
+    var writes = 0
+    override private[sdk] def resolveRule(exp: ExperimentData, isUnitPinnedMissing: Boolean): Option[(Int, Boolean)] = {
+      evaluations += 1
+      super.resolveRule(exp, isUnitPinnedMissing)
+    }
+    override private[sdk] def storeAssignment(experimentName: String, cached: Context.Cached): Unit = {
+      writes += 1
+      super.storeAssignment(experimentName, cached)
+    }
+  }
+
+  test("an unchanged cached assignment is read without writing the cache again") {
+    val plain = expAbc.copy(id = 3, name = "exp_plain", variants = expAbc.variants.map(_.copy(config = None)))
+    val context = new CountingContext(ContextData(List(withRules(assignRule(1)), plain)))
+    context.setAttribute("country", Json.fromString("US"))
+    Seq("exp_test_abc", "exp_plain").foreach { name =>
+      context.peek(name)
+      context.treatment(name)
+    }
+    val writes = context.writes
+    (1 to 3).foreach { _ =>
+      assert(context.treatment("exp_test_abc") == 1)
+      assert(context.peek("exp_plain") == 2)
+      assert(context.variableValue("button.color", "none") == "\"blue\"")
+    }
+    assert(context.writes == writes)
+  }
+
+  test("an experiment without rules never evaluates rules") {
+    val context = new CountingContext(ContextData(List(expAbc.copy(assignmentRules = Some("")))))
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 2)
+    context.setAttribute("unrelated", Json.True)
+    context.refresh(ContextData(List(expAbc)))
+    assert(context.treatment("exp_test_abc") == 2)
+    assert(context.evaluations == 0)
   }
 }

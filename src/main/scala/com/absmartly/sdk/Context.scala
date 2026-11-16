@@ -645,7 +645,7 @@ class Context(
       case Some(cached) =>
         revalidate(cached, experiment, hasOverride, hasCustom) match {
           case Some(valid) =>
-            if (valid ne cached) _assignments(experimentName) = valid
+            if (valid ne cached) storeAssignment(experimentName, valid)
             return valid
           case None =>
         }
@@ -709,7 +709,7 @@ class Context(
         )
     }
 
-    _assignments(experimentName) = cached
+    storeAssignment(experimentName, cached)
     cached
   }
 
@@ -752,6 +752,10 @@ class Context(
 
   /** Parses an experiment's `assignmentRules`; `private[sdk]` so tests can count parses. */
   private[sdk] def parseRules(assignmentRules: String): Option[List[Json]] = AudienceMatcher.parseRules(assignmentRules)
+
+  /** Writes an assignment-cache entry; `private[sdk]` so tests can count writes. */
+  private[sdk] def storeAssignment(experimentName: String, cached: Context.Cached): Unit =
+    _assignments(experimentName) = cached
 
   private def hasRules(exp: ExperimentData): Boolean = exp.assignmentRules.exists(_.nonEmpty)
 
@@ -927,7 +931,7 @@ class Context(
   private def _queueExposure(cached: Context.Cached): Unit = {
     val assignment = cached.assignment
     if (!assignment.exposed) {
-      _assignments(assignment.name) = cached.copy(assignment = assignment.copy(exposed = true))
+      storeAssignment(assignment.name, cached.copy(assignment = assignment.copy(exposed = true)))
 
       val exposure = Exposure(
         id = assignment.id,
