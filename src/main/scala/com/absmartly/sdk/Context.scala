@@ -671,8 +671,7 @@ class Context(
 
       case Some(exp) if hasRules(exp) =>
         val rule = resolveRule(exp, isUnitPinnedMissing = false)
-        val ruleState = (ruleOverride: Boolean) =>
-          Context.RuleState(ruleOverride, rule.map(_._1), ruleGeneration(exp), rule.exists(_._2))
+        val ruleState = Context.RuleState(rule.map(_._1), ruleGeneration(exp), rule.exists(_._2))
 
         rule match {
           // A matching rule wins over audience, traffic, full-on and custom
@@ -680,9 +679,9 @@ class Context(
           case Some((variant, _)) =>
             Context.Cached(
               createAssignmentRaw(exp, variant, assigned = false, eligible = true, audienceMismatch = false, fullOn = false, custom = false),
-              ruleState(true)
+              ruleState
             )
-          case None => Context.Cached(assignWithoutRule(exp, hasCustom), ruleState(false))
+          case None => Context.Cached(assignWithoutRule(exp, hasCustom), ruleState)
         }
 
       case Some(exp) => Context.Cached(assignWithoutRule(exp, hasCustom), Context.RuleState.NoRules)
@@ -813,7 +812,7 @@ class Context(
     val generation = ruleGeneration(exp)
     val rulesChanged = generation != cached.rule.generation
 
-    if (rulesChanged && generation == 0L && (cached.rule.variant.isDefined || cached.rule.ruleOverride)) {
+    if (rulesChanged && generation == 0L && cached.rule.ruleOverride) {
       None
     } else if (_attrsSeq > cached.assignment.attrsSeq || rulesChanged) {
       val withRules =
@@ -1002,15 +1001,18 @@ object Context {
   /**
    * Assignment-rule state of a cached assignment, kept out of the public `Assignment`.
    *
-   * @param ruleOverride whether a rule gave the variant
-   * @param variant      the variant the rules resolved to (None: no rule matched)
-   * @param generation   the rule generation it was resolved against (0: no rules); a change re-evaluates
-   * @param missingUnit  a split rule matched while the experiment's unit was not set
+   * @param variant     the variant the rules resolved to (None: no rule matched)
+   * @param generation  the rule generation it was resolved against (0: no rules); a change re-evaluates
+   * @param missingUnit a split rule matched while the experiment's unit was not set
    */
-  private[sdk] final case class RuleState(ruleOverride: Boolean, variant: Option[Int], generation: Long, missingUnit: Boolean)
+  private[sdk] final case class RuleState(variant: Option[Int], generation: Long, missingUnit: Boolean) {
+
+    /** Whether a rule gave the variant. */
+    def ruleOverride: Boolean = variant.isDefined
+  }
 
   private[sdk] object RuleState {
-    val NoRules: RuleState = RuleState(ruleOverride = false, variant = None, generation = 0L, missingUnit = false)
+    val NoRules: RuleState = RuleState(variant = None, generation = 0L, missingUnit = false)
   }
 
   private[sdk] final case class Cached(assignment: Assignment, rule: RuleState)
