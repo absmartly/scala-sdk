@@ -49,7 +49,6 @@ class Context(
   private val _exposures: mutable.ListBuffer[Exposure] = mutable.ListBuffer()
   private val _goals: mutable.ListBuffer[Goal] = mutable.ListBuffer()
 
-  // Assignment cache, with the assignment-rule state each entry was resolved with
   private val _assignments: mutable.Map[String, Context.Cached] = mutable.Map()
 
   // Experiment indices

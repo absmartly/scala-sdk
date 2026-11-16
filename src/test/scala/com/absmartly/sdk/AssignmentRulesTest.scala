@@ -678,17 +678,14 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(context.treatment("exp_test_abc") == 1)
     assert(evaluations == 1)
 
-    // Unrelated attribute: re-evaluated once, same outcome, then cached again.
     context.setAttribute("unrelated", Json.True)
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
     assert(evaluations == 2)
 
-    // Refresh with identical rules: nothing to re-evaluate.
     context.refresh(ContextData(List(withRules(assignRule(1)))))
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
     assert(evaluations == 2)
 
-    // Refresh with different rules giving the same outcome: re-evaluated once.
     context.refresh(ContextData(List(withRules(assignRule(1), assignRule(0, "null")))))
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
     assert(evaluations == 3)
