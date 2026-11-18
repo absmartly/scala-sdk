@@ -175,12 +175,14 @@ class AssignmentRulesTest extends AnyFunSuite {
       audienceStrict = true,
       audience = Some("""{"filter":[{"gte":[{"var":"age"},{"value":20}]}]}""")
     )
-    val context = contextWith(exp)
+    val context = new CountingContext(ContextData(List(exp)))
     context.setAttribute("country", Json.fromString("US"))
     context.setAttribute("age", Json.fromInt(10))
     assert(context.treatment("exp_test_abc") == 1)
+    assert(context.evaluations == 1)
     context.setAttribute("unrelated", Json.fromString("x"))
     assert(context.treatment("exp_test_abc") == 1)
+    assert(context.evaluations == 2)
     assert(context.pending() == 1)
   }
 
