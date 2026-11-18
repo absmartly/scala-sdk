@@ -170,6 +170,20 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(!publishedExposures(context).head.audienceMismatch)
   }
 
+  test("a rule-won assignment over a strict audience mismatch survives an unrelated attribute change") {
+    val exp = withRules(assignRule(1)).copy(
+      audienceStrict = true,
+      audience = Some("""{"filter":[{"gte":[{"var":"age"},{"value":20}]}]}""")
+    )
+    val context = contextWith(exp)
+    context.setAttribute("country", Json.fromString("US"))
+    context.setAttribute("age", Json.fromInt(10))
+    assert(context.treatment("exp_test_abc") == 1)
+    context.setAttribute("unrelated", Json.fromString("x"))
+    assert(context.treatment("exp_test_abc") == 1)
+    assert(context.pending() == 1)
+  }
+
   test("a strict audience mismatch applies when no rule matches") {
     val exp = withRules(assignRule(1)).copy(
       audienceStrict = true,
@@ -362,6 +376,13 @@ class AssignmentRulesTest extends AnyFunSuite {
       assignRule(0, "null")
     )
     assert(contextWith(negative).peek("exp_test_abc") == 2)
+  }
+
+  test("an integral assign variant far beyond Int range saturates, never wraps, and stops rule evaluation") {
+    Seq("4294967297", "1e20", "-1e20", "9007199254740993").foreach { variant =>
+      val exp = withRules(s"""{"type":"assign","variant":$variant,"conditions":null}""", assignRule(1, "null"))
+      assert(contextWith(exp).peek("exp_test_abc") == 2, variant)
+    }
   }
 
   test("a non-finite assign variant is skipped like JS Infinity, so the next rule wins") {
