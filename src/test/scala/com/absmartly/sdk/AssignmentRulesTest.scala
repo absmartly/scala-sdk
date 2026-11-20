@@ -170,6 +170,22 @@ class AssignmentRulesTest extends AnyFunSuite {
     assert(!publishedExposures(context).head.audienceMismatch)
   }
 
+  test("a rule-won assignment over a strict audience mismatch survives an unrelated attribute change") {
+    val exp = withRules(assignRule(1)).copy(
+      audienceStrict = true,
+      audience = Some("""{"filter":[{"gte":[{"var":"age"},{"value":20}]}]}""")
+    )
+    val context = new CountingContext(ContextData(List(exp)))
+    context.setAttribute("country", Json.fromString("US"))
+    context.setAttribute("age", Json.fromInt(10))
+    assert(context.treatment("exp_test_abc") == 1)
+    assert(context.evaluations == 1)
+    context.setAttribute("unrelated", Json.fromString("x"))
+    assert(context.treatment("exp_test_abc") == 1)
+    assert(context.evaluations == 2)
+    assert(context.pending() == 1)
+  }
+
   test("a strict audience mismatch applies when no rule matches") {
     val exp = withRules(assignRule(1)).copy(
       audienceStrict = true,
@@ -362,6 +378,27 @@ class AssignmentRulesTest extends AnyFunSuite {
       assignRule(0, "null")
     )
     assert(contextWith(negative).peek("exp_test_abc") == 2)
+  }
+
+  test("an integral assign variant far beyond Int range saturates, never wraps, and stops rule evaluation") {
+    Seq("4294967297", "1e20", "-1e20", "9007199254740993").foreach { variant =>
+      val exp = withRules(s"""{"type":"assign","variant":$variant,"conditions":null}""", assignRule(1, "null"))
+      assert(contextWith(exp).peek("exp_test_abc") == 2, variant)
+    }
+  }
+
+  test("a non-finite assign variant is skipped like JS Infinity, so the next rule wins") {
+    Seq("1e400", "-1e400", "1e999999999").foreach { variant =>
+      val exp = withRules(s"""{"type":"assign","variant":$variant,"conditions":null}""", assignRule(1, "null"))
+      assert(contextWith(exp).peek("exp_test_abc") == 1, variant)
+    }
+  }
+
+  test("an assign variant is read as the JS double it parses to") {
+    val tiny = withRules("""{"type":"assign","variant":1e-400,"conditions":null}""", assignRule(1, "null"))
+    assert(contextWith(tiny).peek("exp_test_abc") == 0)
+    val nearOne = withRules("""{"type":"assign","variant":1.0000000000000001,"conditions":null}""", assignRule(0, "null"))
+    assert(contextWith(nearOne).peek("exp_test_abc") == 1)
   }
 
   test("an out-of-bounds or negative assign variant falls back to normal assignment") {
@@ -653,31 +690,63 @@ class AssignmentRulesTest extends AnyFunSuite {
   }
 
   test("a same-outcome revalidation is remembered, so later reads do not evaluate the rules again") {
-    var evaluations = 0
-    val context = new Context(sdkFor(), ContextData(List(withRules(assignRule(1)))), units, ContextOptions(), NoOpEventLogger) {
-      override private[sdk] def resolveRule(exp: ExperimentData, isUnitPinnedMissing: Boolean): Option[(Int, Boolean)] = {
-        evaluations += 1
-        super.resolveRule(exp, isUnitPinnedMissing)
-      }
-    }
+    val context = new CountingContext(ContextData(List(withRules(assignRule(1)))))
     context.setAttribute("country", Json.fromString("US"))
     assert(context.treatment("exp_test_abc") == 1)
-    assert(evaluations == 1)
+    assert(context.evaluations == 1)
 
-    // Unrelated attribute: re-evaluated once, same outcome, then cached again.
     context.setAttribute("unrelated", Json.True)
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
-    assert(evaluations == 2)
+    assert(context.evaluations == 2)
 
-    // Refresh with identical rules: nothing to re-evaluate.
     context.refresh(ContextData(List(withRules(assignRule(1)))))
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
-    assert(evaluations == 2)
+    assert(context.evaluations == 2)
 
-    // Refresh with different rules giving the same outcome: re-evaluated once.
     context.refresh(ContextData(List(withRules(assignRule(1), assignRule(0, "null")))))
     (1 to 3).foreach(_ => assert(context.treatment("exp_test_abc") == 1))
-    assert(evaluations == 3)
+    assert(context.evaluations == 3)
     assert(context.pending() == 1)
+  }
+
+  private class CountingContext(data: ContextData)
+      extends Context(sdkFor(), data, units, ContextOptions(), NoOpEventLogger) {
+    var evaluations = 0
+    var writes = 0
+    override private[sdk] def resolveRule(exp: ExperimentData, isUnitPinnedMissing: Boolean): Option[(Int, Boolean)] = {
+      evaluations += 1
+      super.resolveRule(exp, isUnitPinnedMissing)
+    }
+    override private[sdk] def storeAssignment(experimentName: String, cached: Context.Cached): Unit = {
+      writes += 1
+      super.storeAssignment(experimentName, cached)
+    }
+  }
+
+  test("an unchanged cached assignment is read without writing the cache again") {
+    val plain = expAbc.copy(id = 3, name = "exp_plain", variants = expAbc.variants.map(_.copy(config = None)))
+    val context = new CountingContext(ContextData(List(withRules(assignRule(1)), plain)))
+    context.setAttribute("country", Json.fromString("US"))
+    Seq("exp_test_abc", "exp_plain").foreach { name =>
+      context.peek(name)
+      context.treatment(name)
+    }
+    val writes = context.writes
+    (1 to 3).foreach { _ =>
+      assert(context.treatment("exp_test_abc") == 1)
+      assert(context.peek("exp_plain") == 2)
+      assert(context.variableValue("button.color", "none") == "\"blue\"")
+    }
+    assert(context.writes == writes)
+  }
+
+  test("an experiment without rules never evaluates rules") {
+    val context = new CountingContext(ContextData(List(expAbc.copy(assignmentRules = Some("")))))
+    context.setAttribute("country", Json.fromString("US"))
+    assert(context.treatment("exp_test_abc") == 2)
+    context.setAttribute("unrelated", Json.True)
+    context.refresh(ContextData(List(expAbc)))
+    assert(context.treatment("exp_test_abc") == 2)
+    assert(context.evaluations == 0)
   }
 }

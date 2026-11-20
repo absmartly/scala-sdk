@@ -112,18 +112,17 @@ object RuleAction {
 
   private val SplitPercentagesSumTolerance = 0.01
 
-  private val OutOfRangeVariant = -1
-
   // JS parseFloat: the longest leading decimal literal, surrounding text ignored.
   private val FloatPrefix = """^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)""".r.unanchored
 
   private[sdk] def parse(rule: io.circe.JsonObject): Option[RuleAction] =
     rule("type").flatMap(_.asString) match {
       case Some("assign") =>
-        // Like JS `Number.isInteger`: an integral variant beyond Int range is still an assign
-        // action, kept out of bounds so the variant bounds check stops rule evaluation.
-        rule("variant").flatMap(_.asNumber).flatMap { n =>
-          n.toInt.orElse(n.toBigDecimal.filter(_.isWhole).map(_ => OutOfRangeVariant)).map(Assign(_))
+        // Like JS, on the parsed double: a non-finite or non-integral variant (1e400, 1.5) is no
+        // action and the next rule is tried. An integral one beyond Int range saturates to
+        // Int.MaxValue/MinValue, out of bounds, so the variant bounds check stops rule evaluation.
+        rule("variant").flatMap(_.asNumber).map(_.toDouble).filter(d => !d.isInfinite && d == math.rint(d)).map { d =>
+          Assign(d.toInt)
         }
       case Some("split") =>
         rule("percentages").flatMap(_.asString).flatMap(parseSplitPercentages).map(Split(_))
